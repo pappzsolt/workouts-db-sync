@@ -39,3 +39,17 @@ verify_production_backup:
     - apk add --no-cache openssh-client
   script:
     - sh scripts/verify-production-backup.sh
+
+# Read-only test database backup, verified in the job and then deleted.
+# No database dump is stored as a GitLab artifact.
+backup_test_database:
+  stage: backup
+  image: postgres:16-alpine
+  needs: []
+  resource_group: workouts-test-backup
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual
+      allow_failure: false
+  script:
+    - sh scripts/backup-test-database.sh
