@@ -60,9 +60,9 @@ verify_production_backup:
   resource_group: workouts-production-backup
   rules: *main_auto_rules
   before_script:
-    - apk add --no-cache openssh-client bash
+    - apk add --no-cache openssh-client python3
   script:
-    - bash scripts/verify-production-backup.sh
+    - python3 scripts/db_sync.py verify-production
 
 # Read-only test database backup, verified in the job and then deleted.
 # No database dump is stored as a GitLab artifact.
@@ -71,8 +71,10 @@ backup_test_database:
   image: postgres:17-alpine
   resource_group: workouts-test-backup
   rules: *main_auto_rules
+  before_script:
+    - apk add --no-cache python3
   script:
-    - sh scripts/backup-test-database.sh
+    - python3 scripts/db_sync.py backup-test
 
 # Proves the restricted test SSH receiver accepts a streamed production dump.
 # The receiver validates the archive and deletes it; no database is restored.
@@ -82,9 +84,9 @@ verify_test_restore_ssh:
   resource_group: workouts-production-to-test-ssh
   rules: *main_auto_rules
   before_script:
-    - apk add --no-cache openssh-client bash
+    - apk add --no-cache openssh-client python3
   script:
-    - bash scripts/verify-test-restore-ssh.sh
+    - python3 scripts/db_sync.py verify-transport
 
 # Before every restore, remove orphaned routines/sequences left by an older
 # candidate cleanup. Refuses to destroy a candidate containing business tables.
@@ -94,9 +96,9 @@ prepare_candidate:
   resource_group: workouts-production-to-test-ssh
   rules: *main_auto_rules
   before_script:
-    - apk add --no-cache openssh-client bash
+    - apk add --no-cache openssh-client python3
   script:
-    - bash scripts/prepare-candidate.sh
+    - python3 scripts/db_sync.py prepare-candidate
 
 # Restricted production restore to an EMPTY workouts_restore_candidate ONLY.
 # A successful test sync clears the candidate for the next pipeline.
@@ -115,9 +117,9 @@ restore_production_to_candidate:
       when: on_success
     - when: never
   before_script:
-    - apk add --no-cache openssh-client bash
+    - apk add --no-cache openssh-client python3
   script:
-    - bash scripts/restore-production-to-candidate.sh
+    - python3 scripts/db_sync.py restore-candidate
 
 # Test data refresh from the candidate restored by the preceding stage.
 # The server takes a durable backup, pauses ONLY the test API and performs
@@ -129,9 +131,9 @@ sync_candidate_to_test:
   resource_group: workouts-production-to-test-ssh
   rules: *main_auto_rules
   before_script:
-    - apk add --no-cache openssh-client bash
+    - apk add --no-cache openssh-client python3
   script:
-    - bash scripts/sync-candidate-to-test.sh
+    - python3 scripts/db_sync.py sync-test
 
 # Independent, read-only verification that cleanup and test restart succeeded.
 verify_sync_result:

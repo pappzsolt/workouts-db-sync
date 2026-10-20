@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 while IFS= read -r -d '' file; do bash -n "$file"; done < <(find "$ROOT/scripts" -type f -name '*.sh' -print0)
+python3 -m py_compile "$ROOT/scripts/db_sync.py" "$ROOT/scripts/ansible_run.py"
 python3 - "$ROOT/.gitlab-ci.yml" <<'PYTEST'
 import sys
 try:
@@ -14,7 +15,7 @@ with open(sys.argv[1]) as f:
 assert cfg['workflow']['rules'][0]['when']=='always'
 assert cfg['restore_production_to_candidate']['rules'][0]['when']=='manual'
 assert cfg['sync_candidate_to_test']['stage']=='sync_test'
-assert cfg['verify_production_backup']['script']==['bash scripts/verify-production-backup.sh']
+assert cfg['verify_production_backup']['script']==['python3 scripts/db_sync.py verify-production']
 assert cfg['preflight']['script']==['ansible-playbook -i ansible/inventory.ini -c local ansible/preflight.yml']
 assert cfg['ansible_bootstrap']['script']==['python3 scripts/ansible_run.py bootstrap']
 assert cfg['verify_sync_result']['script']==['python3 scripts/ansible_run.py verify']
@@ -40,5 +41,7 @@ assert bootstrap_tasks['Set candidate owner only if needed']['when']
 verify_tasks = {task['name']: task for task in verify['tasks'] if 'name' in task}
 assert 'Read candidate cleanup state in one database round trip' in verify_tasks
 assert "candidate_state.stdout | trim == '0|0|1'" in verify_tasks['Fail pipeline if postconditions are not satisfied']['ansible.builtin.assert']['that']
+for job, operation in {'backup_test_database':'backup-test','verify_test_restore_ssh':'verify-transport','prepare_candidate':'prepare-candidate','restore_production_to_candidate':'restore-candidate','sync_candidate_to_test':'sync-test'}.items():
+    assert cfg[job]['script'] == [f'python3 scripts/db_sync.py {operation}']
 print('Bash syntax, CI YAML and Ansible refactor invariants OK')
 PYTEST
