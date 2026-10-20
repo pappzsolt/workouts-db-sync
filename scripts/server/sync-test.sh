@@ -57,9 +57,17 @@ pg "$PG/pg_dump" -Fc -f "$BACKUP" -d "$DST"
 pg "$PG/pg_restore" --list "$BACKUP" >/dev/null
 echo "Test database backup verified: $BACKUP"
 
-# Build the exact insert file from only the 28 production-derived tables.
+# The users/coaches INSERT triggers rebuild account_login_identifiers.
+# Keep the table in the TRUNCATE set, but never insert its source rows again:
+# doing so violates account_login_identifiers_pkey.
+# The other 27 business tables are copied from the candidate.
 ARGS=()
-for name in "${TABLES[@]}"; do ARGS+=(--table="public.$name"); done
+for name in "${TABLES[@]}"; do
+  if [[ "$name" == 'account_login_identifiers' ]]; then
+    continue
+  fi
+  ARGS+=(--table="public.$name")
+done
 pg "$PG/pg_dump" -d "$SRC" --data-only --column-inserts --no-owner --no-acl "${ARGS[@]}" -f "$SQLFILE"
 [[ -s "$SQLFILE" ]] || { echo 'ERROR: Empty transfer data' >&2; exit 1; }
 
