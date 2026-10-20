@@ -15,11 +15,17 @@ assert cfg['workflow']['rules'][0]['when']=='always'
 assert cfg['restore_production_to_candidate']['rules'][0]['when']=='manual'
 assert cfg['sync_candidate_to_test']['stage']=='sync_test'
 assert cfg['verify_production_backup']['script']==['bash scripts/verify-production-backup.sh']
-assert cfg['preflight']['script']==['ansible-playbook -i localhost, -c local ansible/preflight.yml']
+assert cfg['preflight']['script']==['ansible-playbook -i ansible/inventory.ini -c local ansible/preflight.yml']
+assert cfg['ansible_bootstrap']['script']==['python3 scripts/ansible_run.py bootstrap']
+assert cfg['verify_sync_result']['script']==['python3 scripts/ansible_run.py verify']
 assert cfg['verify_sync_result']['stage']=='verify_result'
 for item in ('ansible/preflight.yml', 'ansible/verify-result.yml', 'ansible/bootstrap.yml'):
     with open(f'{sys.argv[1].rsplit("/",1)[0]}/{item}', encoding='utf-8') as source:
         yaml.safe_load(source)
+with open(f'{sys.argv[1].rsplit("/",1)[0]}/ansible/inventory.ini', encoding='utf-8') as inv:
+    contents=inv.read()
+    assert '[workouts_production]' in contents and 'hevsrv01' in contents
+    assert '[workouts_test]' in contents and 'budsh' in contents
 bootstrap_path = f'{sys.argv[1].rsplit("/",1)[0]}/ansible/bootstrap.yml'
 verify_path = f'{sys.argv[1].rsplit("/",1)[0]}/ansible/verify-result.yml'
 with open(bootstrap_path, encoding='utf-8') as source:

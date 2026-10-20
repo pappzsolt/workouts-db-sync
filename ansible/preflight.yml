@@ -26,3 +26,28 @@
           - prod_db != test_db
         fail_msg: 'Refusing to operate with unexpected CI/CD identity or target.'
         success_msg: 'Read-only preflight configuration checks passed.'
+
+- name: Check both SSH endpoints before database work
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Require inventory to define the exact two approved hosts
+      ansible.builtin.assert:
+        that:
+          - groups['workouts_production'] | default([]) == ['hevsrv01']
+          - groups['workouts_test'] | default([]) == ['budsh']
+          - hostvars['hevsrv01'].ansible_host == '2.29.51.66'
+          - hostvars['budsh'].ansible_host == '192.168.1.37'
+        fail_msg: 'Unexpected infrastructure inventory: refusing synchronization.'
+
+    - name: Check SSH service reachability on both approved hosts
+      ansible.builtin.wait_for:
+        host: "{{ hostvars[item].ansible_host }}"
+        port: 22
+        connect_timeout: 5
+        timeout: 20
+        state: started
+      loop:
+        - hevsrv01
+        - budsh

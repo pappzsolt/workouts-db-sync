@@ -41,7 +41,7 @@ ansible_bootstrap:
     - apt-get update -qq && apt-get install -y -qq --no-install-recommends openssh-client >/dev/null
     - pip install --no-cache-dir 'ansible-core==2.19.4'
   script:
-    - bash scripts/ansible-bootstrap.sh
+    - python3 scripts/ansible_run.py bootstrap
 
 preflight:
   stage: preflight
@@ -50,7 +50,7 @@ preflight:
   before_script:
     - pip install --no-cache-dir 'ansible-core==2.19.4'
   script:
-    - ansible-playbook -i localhost, -c local ansible/preflight.yml
+    - ansible-playbook -i ansible/inventory.ini -c local ansible/preflight.yml
 
 # Streams a custom-format backup and validates its archive index.
 # It does not publish production data as a GitLab job artifact.
@@ -143,4 +143,4 @@ verify_sync_result:
     - apt-get update -qq && apt-get install -y -qq --no-install-recommends openssh-client >/dev/null
     - pip install --no-cache-dir 'ansible-core==2.19.4'
   script:
-    - bash scripts/ansible-bootstrap.sh verify
+    - python3 scripts/ansible_run.py verify
