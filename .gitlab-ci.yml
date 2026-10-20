@@ -1,7 +1,11 @@
-# Workouts production -> test DB sync. Manually start a web pipeline on main; jobs run in order.
+# Workouts production -> test DB sync. Push or web on main creates a pipeline.
+# Push pipelines require approval before restoring production data to test.
 workflow:
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "web" && $CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+      when: always
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "web"'
+      when: always
     - when: never
 
 # Separate stages enforce strict order; no needs: [] bypasses the stage gate.
@@ -114,7 +118,12 @@ restore_production_to_candidate:
   image: postgres:17-alpine
   resource_group: workouts-production-to-test-ssh
   rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
+    # A code push must never start a production-data refresh without approval.
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+      when: manual
+      allow_failure: false
+    # An explicitly started web pipeline runs all stages in order.
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "web"'
       when: on_success
     - when: never
   before_script:
