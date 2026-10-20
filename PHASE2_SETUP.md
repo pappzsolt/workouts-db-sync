@@ -1,23 +1,18 @@
-# Phase 2 – manual setup
+# Phase 2 – production backup verification via GitLab CI/CD
 
-This repository contains manually triggered CI jobs for provisioning a restricted production backup entrypoint and verifying a PostgreSQL custom-format dump. It does **not** restore test data yet.
+The production backup command `/usr/local/bin/workouts-db-backup` is already installed on `hevsrv01`, and the `workouts-db-backup` SSH key is restricted to that command. **Do not run any provisioning job.** Only the manually launched `verify_production_backup` job connects to production, reads a `pg_dump -Fc` archive, verifies that `pg_restore --list` can parse the archive, and deletes the temporary archive at job exit. It does not restore the test database, upload a dump as an artifact, or modify production.
 
-## Required access
+## GitLab settings (workouts/workouts-db-sync)
 
-- `PROD_BACKUP_SSH_KEY`: GitLab **file-type**, protected variable holding the private key whose public key is permitted as a forced command for `workouts-db-backup` on production.
-- `PROD_SSH_KNOWN_HOSTS`: GitLab **file-type**, protected variable containing a *previously verified* host key for `2.29.51.66`. Do not learn the host key at job runtime using unauthenticated `ssh-keyscan`.
-- `PROD_DEPLOY_SSH_KEY`: GitLab **file-type**, protected variable for a separate one-time deploy identity.
-- `PROD_DEPLOY_USER`: SSH account with permission to run **only** an independently reviewed privileged installer command.
-- `PROD_BACKUP_PUBLIC_KEY`: Public key matching `PROD_BACKUP_SSH_KEY`.
+Protect the `main` branch and limit who can run the manual job. Add these CI/CD variables at **Settings → CI/CD → Variables**:
 
-Set `main` as a protected branch and restrict who may launch these manual jobs. Use masked/hidden variables when supported, and never log secrets.
+- `PROD_BACKUP_SSH_KEY`: **File** type, **Protected**. Contents: the dedicated private key corresponding to `/home/workouts-db-backup/.ssh/authorized_keys` on `hevsrv01`. Avoid printing or pasting it into logs or chat. File-type variables point to a temporary file in the CI job; this is intentionally **not** an SSH path on budsh.
+- `PROD_SSH_KNOWN_HOSTS`: **File** type, **Protected**. Contents: the verified `2.29.51.66` SSH host key entry. Verify its fingerprint independently against `hevsrv01` before adding it; do **not** trust a first-contact `ssh-keyscan` from CI.
 
-## Bootstrap limitation
+The repository already provides `PROD_HOST=2.29.51.66`. The verification job uses the key via `ssh -T` with strict host-key checking and a fixed `workouts-db-backup` remote username. Keep the existing restricted forced SSH command; no sudo/Docker access is required in the CI job.
 
-A GitLab job cannot securely install a root-owned executable or update another user's `authorized_keys` from the currently available `workouts-db-backup` account: its forced command is `/usr/bin/false`. **The production administrator must first authorize a narrow bootstrap mechanism**, such as a reviewed root-owned installer at `/usr/local/sbin/workouts-db-backup-install`, callable by the deploy identity via narrowly scoped passwordless sudo. Do not add the deploy or backup account to the Docker group and do not grant general `sudo` privileges.
+## Run
 
-**The provision job is intentionally blocked until the narrow installer exists.** The supplied provisioning script assumes the installer collects two staged inputs from `/tmp/production-backup.sh` and `/tmp/backup.pub`; this staging path must be hardened in the installer (ownership and symlink checks, atomic installation, fixed paths) before enabling the job. Because an unsafe privileged installer would undermine the access restrictions, review and authorize that implementation separately.
+Start a new pipeline manually for protected `main`, then run `verify_production_backup`. Success prints `Production backup verified` and archive size, not the archive contents. Do not enable GitLab debug tracing for this job.
 
-Until provisioned, the backup verification job also cannot succeed because the SSH forced command remains `/usr/bin/false`.
-
-Production archive contents are sensitive. The verification job neither logs the dump nor publishes it as a GitLab artifact. The final sync implementation must use encrypted transport, carefully scoped temporary files, and decide on sanitization/token revocation before starting the test API.
+**Limits:** `pg_restore --list` checks the archive structure, not a full test restore. The production data can contain private and authentication information; a later sync stage must plan isolation, sanitization, token revocation and outbound-email blocking before enabling the test API.

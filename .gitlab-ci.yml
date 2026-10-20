@@ -6,7 +6,6 @@ workflow:
 
 stages:
   - preflight
-  - provision
   - backup
 
 variables:
@@ -24,22 +23,6 @@ preflight:
       allow_failure: false
   script:
     - sh scripts/preflight.sh
-
-# One-time installation, requires separately authorized deploy SSH credentials.
-# The deploy account must have explicitly scoped sudo rights; NOT Docker group.
-provision_production_backup:
-  stage: provision
-  image: alpine:3.20
-  needs: []
-  resource_group: workouts-production-backup-provision
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
-      when: manual
-      allow_failure: false
-  before_script:
-    - apk add --no-cache openssh-client
-  script:
-    - sh scripts/provision-production-backup.sh
 
 # Streams a custom-format backup and validates its archive index.
 # It does not publish production data as a GitLab job artifact.
