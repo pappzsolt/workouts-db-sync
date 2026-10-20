@@ -91,3 +91,16 @@ For open source projects, say how it is licensed.
 
 ## Project status
 If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+
+## CI pipeline behavior and maintenance
+
+Pushes to `main` run the Ansible bootstrap and read-only prechecks, then wait
+for manual approval of `restore_production_to_candidate`. A pipeline explicitly
+started through GitLab **Run pipeline** proceeds through the restore stage
+automatically. Both paths preserve the stage order and keep dumps out of artifacts.
+
+The SSH client setup is shared in `scripts/lib/ssh.sh`. All GitLab File variables
+are copied to a private temporary directory, then removed on exit.
+
+For local static validation run `bash scripts/tests/static-checks.sh`. It does not
+connect to production or the test server and does not alter databases.

@@ -32,7 +32,7 @@ ansible_bootstrap:
   stage: bootstrap
   image: python:3.12-slim
   resource_group: workouts-production-to-test-ssh
-  rules:
+  rules: &main_auto_rules
     - if: '$CI_COMMIT_BRANCH == "main"'
       when: on_success
     - when: never
@@ -45,10 +45,7 @@ ansible_bootstrap:
 preflight:
   stage: preflight
   image: alpine:3.20
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
-      when: on_success
-    - when: never
+  rules: *main_auto_rules
   script:
     - sh scripts/preflight.sh
 
@@ -58,14 +55,11 @@ verify_production_backup:
   stage: verify_production
   image: postgres:17-alpine
   resource_group: workouts-production-backup
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
-      when: on_success
-    - when: never
+  rules: *main_auto_rules
   before_script:
-    - apk add --no-cache openssh-client
+    - apk add --no-cache openssh-client bash
   script:
-    - sh scripts/verify-production-backup.sh
+    - bash scripts/verify-production-backup.sh
 
 # Read-only test database backup, verified in the job and then deleted.
 # No database dump is stored as a GitLab artifact.
@@ -73,10 +67,7 @@ backup_test_database:
   stage: backup_test
   image: postgres:17-alpine
   resource_group: workouts-test-backup
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
-      when: on_success
-    - when: never
+  rules: *main_auto_rules
   script:
     - sh scripts/backup-test-database.sh
 
@@ -86,10 +77,7 @@ verify_test_restore_ssh:
   stage: verify_transport
   image: postgres:17-alpine
   resource_group: workouts-production-to-test-ssh
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
-      when: on_success
-    - when: never
+  rules: *main_auto_rules
   before_script:
     - apk add --no-cache openssh-client bash
   script:
@@ -101,10 +89,7 @@ prepare_candidate:
   stage: prepare_candidate
   image: alpine:3.20
   resource_group: workouts-production-to-test-ssh
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
-      when: on_success
-    - when: never
+  rules: *main_auto_rules
   before_script:
     - apk add --no-cache openssh-client bash
   script:
@@ -139,10 +124,7 @@ sync_candidate_to_test:
   stage: sync_test
   image: alpine:3.20
   resource_group: workouts-production-to-test-ssh
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
-      when: on_success
-    - when: never
+  rules: *main_auto_rules
   before_script:
     - apk add --no-cache openssh-client bash
   script:

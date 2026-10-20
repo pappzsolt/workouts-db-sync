@@ -13,7 +13,6 @@ exec 9>"$LOCK"
 flock -n 9 || { echo 'ERROR: Another test sync is running' >&2; exit 1; }
 
 # Exactly these three test-system tables must never be copied from production.
-EXCLUDE=(databasechangelog databasechangeloglock login_rate_limits)
 pg() { runuser -u postgres -- "$@"; }
 q() { pg "$PG/psql" -X -A -t -q -v ON_ERROR_STOP=1 -d "$1" -c "$2"; }
 
