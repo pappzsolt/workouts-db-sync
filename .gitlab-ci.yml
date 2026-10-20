@@ -44,7 +44,7 @@ verify_production_backup:
 # No database dump is stored as a GitLab artifact.
 backup_test_database:
   stage: backup
-  image: postgres:16-alpine
+  image: postgres:17-alpine
   needs: []
   resource_group: workouts-test-backup
   rules:
@@ -85,3 +85,20 @@ restore_production_to_candidate:
     - apk add --no-cache openssh-client bash
   script:
     - bash scripts/restore-production-to-candidate.sh
+
+# Explicitly approved test data refresh from the previously verified candidate.
+# The server takes a durable backup, pauses ONLY the test API and performs
+# a single-transaction data copy preserving Liquibase and test-only records.
+sync_candidate_to_test:
+  stage: backup
+  image: alpine:3.20
+  needs: []
+  resource_group: workouts-production-to-test-ssh
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual
+      allow_failure: false
+  before_script:
+    - apk add --no-cache openssh-client bash
+  script:
+    - bash scripts/sync-candidate-to-test.sh
