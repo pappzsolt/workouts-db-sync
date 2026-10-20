@@ -7,7 +7,7 @@
     pg_bin: /usr/lib/postgresql/17/bin
     ansible_become_password: "{{ lookup('env','ANSIBLE_BECOME_PASSWORD') }}"
   tasks:
-    - name: Count candidate relations, excluding extension-owned objects
+    - name: Read candidate cleanup state in one database round trip
       ansible.builtin.command:
         argv:
           - runuser
@@ -21,32 +21,22 @@
           - -d
           - workouts_restore_candidate
           - -c
-          - "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','S','f') AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid='pg_class'::regclass AND d.objid=c.oid AND d.deptype='e')"
-      register: remaining_relations
-      changed_when: false
-
-    - name: Count candidate user functions excluding extension-owned routines
-      ansible.builtin.command:
-        argv:
-          - runuser
-          - -u
-          - postgres
-          - --
-          - "{{ pg_bin }}/psql"
-          - -XAt
-          - -v
-          - ON_ERROR_STOP=1
-          - -d
-          - workouts_restore_candidate
-          - -c
-          - "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid='pg_proc'::regclass AND d.objid=p.oid AND d.deptype='e')"
-      register: remaining_functions
-      changed_when: false
-
-    - name: Check preserved dblink extension
-      ansible.builtin.command:
-        argv: [runuser, -u, postgres, --, "{{ pg_bin }}/psql", -XAt, -v, ON_ERROR_STOP=1, -d, workouts_restore_candidate, -c, "SELECT count(*) FROM pg_extension WHERE extname='dblink'"]
-      register: dblink_count
+          - |
+            SELECT
+              (SELECT count(*) FROM pg_class c
+               JOIN pg_namespace n ON n.oid=c.relnamespace
+               WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','S','f')
+                 AND NOT EXISTS (
+                   SELECT 1 FROM pg_depend d
+                   WHERE d.classid='pg_class'::regclass AND d.objid=c.oid AND d.deptype='e')),
+              (SELECT count(*) FROM pg_proc p
+               JOIN pg_namespace n ON n.oid=p.pronamespace
+               WHERE n.nspname='public'
+                 AND NOT EXISTS (
+                   SELECT 1 FROM pg_depend d
+                   WHERE d.classid='pg_proc'::regclass AND d.objid=p.oid AND d.deptype='e')),
+              (SELECT count(*) FROM pg_extension WHERE extname='dblink');
+      register: candidate_state
       changed_when: false
 
     - name: Check test business and Liquibase records
@@ -64,9 +54,7 @@
     - name: Fail pipeline if postconditions are not satisfied
       ansible.builtin.assert:
         that:
-          - remaining_relations.stdout | trim == '0'
-          - remaining_functions.stdout | trim == '0'
-          - dblink_count.stdout | trim == '1'
+          - candidate_state.stdout | trim == '0|0|1'
           - test_counts.stdout.split('|') | map('int') | min > 0
           - api_running.stdout | trim == 'true'
         fail_msg: 'Candidate cleanup, test data, Liquibase or Docker API validation failed.'
