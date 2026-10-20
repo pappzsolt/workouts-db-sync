@@ -1,53 +1,45 @@
 ---
-- name: Validate production-to-test configuration without touching servers
+- name: Validate controlled sync configuration and connectivity without changing servers
   hosts: localhost
   connection: local
   gather_facts: false
+  vars_files:
+    - ../config/sync.yml
   vars:
     ci_project: "{{ lookup('env', 'CI_PROJECT_PATH') }}"
     ci_branch: "{{ lookup('env', 'CI_COMMIT_BRANCH') }}"
     prod_host: "{{ lookup('env', 'PROD_HOST') }}"
     test_host: "{{ lookup('env', 'TEST_HOST') }}"
-    prod_db: "{{ lookup('env', 'PROD_DB') }}"
-    test_db: "{{ lookup('env', 'TEST_DB') }}"
-    staging_db: "{{ lookup('env', 'STAGING_DB') }}"
   tasks:
-    - name: Enforce fixed project, branch, endpoints and databases
+    - name: Verify project, branch, database names and independent endpoints
       ansible.builtin.assert:
         that:
-          - ci_project == 'workouts/workouts-db-sync'
-          - ci_branch == 'main'
-          - prod_host == '2.29.51.66'
-          - test_host == '192.168.1.37'
+          - ci_project == sync_project
+          - ci_branch == sync_branch
+          - prod_host | length > 0
+          - test_host | length > 0
           - prod_host != test_host
-          - prod_db == 'workouts'
-          - test_db == 'workouts_test'
-          - staging_db == 'workouts_restore_staging'
-          - prod_db != test_db
-        fail_msg: 'Refusing to operate with unexpected CI/CD identity or target.'
-        success_msg: 'Read-only preflight configuration checks passed.'
+          - lookup('env', 'PROD_DB') == sync_production_db
+          - lookup('env', 'TEST_DB') == sync_test_db
+          - lookup('env', 'STAGING_DB') == sync_staging_db
+          - sync_production_db != sync_test_db
+          - sync_candidate_db not in [sync_production_db, sync_test_db, sync_staging_db]
+        fail_msg: 'Project, database policy, or non-secret endpoint configuration mismatch.'
 
-- name: Check both SSH endpoints before database work
-  hosts: localhost
-  connection: local
-  gather_facts: false
-  tasks:
-    - name: Require inventory to define the exact two approved hosts
+    - name: Verify generated inventory matches the configured two endpoints
       ansible.builtin.assert:
         that:
-          - groups['workouts_production'] | default([]) == ['hevsrv01']
-          - groups['workouts_test'] | default([]) == ['budsh']
-          - hostvars['hevsrv01'].ansible_host == '2.29.51.66'
-          - hostvars['budsh'].ansible_host == '192.168.1.37'
-        fail_msg: 'Unexpected infrastructure inventory: refusing synchronization.'
+          - groups['workouts_production'] | default([]) | length == 1
+          - groups['workouts_test'] | default([]) | length == 1
+          - hostvars[groups['workouts_production'][0]].ansible_host == prod_host
+          - hostvars[groups['workouts_test'][0]].ansible_host == test_host
+        fail_msg: 'Dynamic inventory is missing or points to unexpected endpoints.'
 
-    - name: Check SSH service reachability on both approved hosts
+    - name: Check SSH TCP reachability without logging into production
       ansible.builtin.wait_for:
         host: "{{ hostvars[item].ansible_host }}"
         port: 22
         connect_timeout: 5
         timeout: 20
         state: started
-      loop:
-        - hevsrv01
-        - budsh
+      loop: "{{ groups['workouts_production'] + groups['workouts_test'] }}"

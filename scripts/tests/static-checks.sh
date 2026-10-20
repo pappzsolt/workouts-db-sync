@@ -16,17 +16,22 @@ assert cfg['workflow']['rules'][0]['when']=='always'
 assert cfg['restore_production_to_candidate']['rules'][0]['when']=='manual'
 assert cfg['sync_candidate_to_test']['stage']=='sync_test'
 assert cfg['verify_production_backup']['script']==['python3 scripts/db_sync.py verify-production']
-assert cfg['preflight']['script']==['ansible-playbook -i ansible/inventory.ini -c local ansible/preflight.yml']
+assert cfg['preflight']['script']==['python3 scripts/ansible_run.py preflight']
 assert cfg['ansible_bootstrap']['script']==['python3 scripts/ansible_run.py bootstrap']
 assert cfg['verify_sync_result']['script']==['python3 scripts/ansible_run.py verify']
 assert cfg['verify_sync_result']['stage']=='verify_result'
+assert cfg['validate_repository']['stage']=='validate'
+assert cfg['postgresql_integration']['stage']=='validate'
+assert 'PROD_HOST' not in cfg.get('variables', {})
+assert 'TEST_HOST' not in cfg.get('variables', {})
 for item in ('ansible/preflight.yml', 'ansible/verify-result.yml', 'ansible/bootstrap.yml'):
     with open(f'{sys.argv[1].rsplit("/",1)[0]}/{item}', encoding='utf-8') as source:
         yaml.safe_load(source)
-with open(f'{sys.argv[1].rsplit("/",1)[0]}/ansible/inventory.ini', encoding='utf-8') as inv:
-    contents=inv.read()
-    assert '[workouts_production]' in contents and 'hevsrv01' in contents
-    assert '[workouts_test]' in contents and 'budsh' in contents
+from pathlib import Path
+root=Path(sys.argv[1]).parent
+assert not (root/'ansible/inventory.ini').exists()
+assert (root/'config/sync.yml').exists()
+assert (root/'sql/reconcile-sequences.sql').exists()
 bootstrap_path = f'{sys.argv[1].rsplit("/",1)[0]}/ansible/bootstrap.yml'
 verify_path = f'{sys.argv[1].rsplit("/",1)[0]}/ansible/verify-result.yml'
 with open(bootstrap_path, encoding='utf-8') as source:
@@ -45,3 +50,5 @@ for job, operation in {'backup_test_database':'backup-test','verify_test_restore
     assert cfg[job]['script'] == [f'python3 scripts/db_sync.py {operation}']
 print('Bash syntax, CI YAML and Ansible refactor invariants OK')
 PYTEST
+
+python3 -m unittest discover -s "$ROOT/tests" -v

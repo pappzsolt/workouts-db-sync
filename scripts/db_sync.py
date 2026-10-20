@@ -31,18 +31,20 @@ def secret_file(name: str, workdir: Path, target: str) -> Path:
 def endpoint(which: str, workdir: Path) -> list[str]:
     if which == 'production':
         host = os.environ.get('PROD_HOST')
-        if host != '2.29.51.66':
+        if not host:
             raise ValueError('Unexpected production host')
         key = secret_file('PROD_BACKUP_SSH_KEY', workdir, 'prod_key')
         hosts = secret_file('PROD_SSH_KNOWN_HOSTS', workdir, 'prod_hosts')
         user = 'workouts-db-backup'
     else:
         host = os.environ.get('TEST_HOST')
-        if host != '192.168.1.37':
+        if not host:
             raise ValueError('Unexpected test host')
         key = secret_file('TEST_RESTORE_SSH_KEY', workdir, 'test_key')
         hosts = secret_file('TEST_RESTORE_SSH_KNOWN_HOSTS', workdir, 'test_hosts')
         user = 'workouts-db-restore'
+    if os.environ.get('PROD_HOST') == os.environ.get('TEST_HOST'):
+        raise ValueError('Production and test endpoints must be different')
     return [
         'ssh', '-T', '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes',
         '-o', 'StrictHostKeyChecking=yes',
@@ -75,8 +77,11 @@ def backup_test(workdir: Path) -> None:
         raise ValueError('Missing TEST_DB_PASSWORD')
     path = workdir / 'test.dump'
     env = os.environ.copy()
-    env.update(PGHOST='172.17.0.1', PGPORT='5432', PGUSER='workouts_db_sync',
-               PGDATABASE='workouts_test', PGPASSWORD=password, PGCONNECT_TIMEOUT='10')
+    env.update(PGHOST=os.environ.get('TEST_DB_HOST', ''),
+               PGPORT=os.environ.get('TEST_DB_PORT', '5432'), PGUSER='workouts_db_sync',
+               PGDATABASE=os.environ.get('TEST_DB', ''), PGPASSWORD=password, PGCONNECT_TIMEOUT='10')
+    if not env['PGHOST'] or not env['PGDATABASE']:
+        raise ValueError('TEST_DB_HOST and TEST_DB are required')
     subprocess.run(['pg_dump', '--format=custom', '--no-owner', '--no-acl',
                     '--no-password', f'--file={path}'], env=env, check=True)
     check_archive(path)

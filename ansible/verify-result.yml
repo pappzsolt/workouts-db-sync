@@ -3,8 +3,10 @@
   hosts: workouts_test
   gather_facts: false
   become: true
+  vars_files:
+    - ../config/sync.yml
   vars:
-    pg_bin: /usr/lib/postgresql/17/bin
+    pg_bin: "{{ sync_pg_bin }}"
     ansible_become_password: "{{ lookup('env','ANSIBLE_BECOME_PASSWORD') }}"
   tasks:
     - name: Read candidate cleanup state in one database round trip
@@ -19,7 +21,7 @@
           - -v
           - ON_ERROR_STOP=1
           - -d
-          - workouts_restore_candidate
+          - "{{ sync_candidate_db }}"
           - -c
           - |
             SELECT
@@ -41,14 +43,24 @@
 
     - name: Check test business and Liquibase records
       ansible.builtin.command:
-        argv: [runuser, -u, postgres, --, "{{ pg_bin }}/psql", -XAt, -v, ON_ERROR_STOP=1, -d, workouts_test, -c, "SELECT (SELECT count(*) FROM public.users), (SELECT count(*) FROM public.workouts), (SELECT count(*) FROM public.exercises), (SELECT count(*) FROM public.databasechangelog)"]
+        argv: [runuser, -u, postgres, --, "{{ pg_bin }}/psql", -XAt, -v, ON_ERROR_STOP=1, -d, "{{ sync_test_db }}", -c, "SELECT (SELECT count(*) FROM public.users), (SELECT count(*) FROM public.workouts), (SELECT count(*) FROM public.exercises), (SELECT count(*) FROM public.databasechangelog)"]
       register: test_counts
       changed_when: false
 
     - name: Check test API Docker state
       ansible.builtin.command:
-        argv: [docker, inspect, -f, "{{ '{{.State.Running}}' }}", workouts-api]
+        argv: [docker, inspect, -f, "{{ '{{.State.Running}}' }}", "{{ sync_test_api }}"]
       register: api_running
+      changed_when: false
+
+    - name: Check optional configured HTTP health endpoint
+      ansible.builtin.uri:
+        url: "{{ lookup('env', 'WORKOUTS_TEST_HEALTH_URL') }}"
+        method: GET
+        status_code: 200
+        return_content: false
+        timeout: 10
+      when: lookup('env', 'WORKOUTS_TEST_HEALTH_URL') | length > 0
       changed_when: false
 
     - name: Fail pipeline if postconditions are not satisfied

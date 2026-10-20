@@ -10,6 +10,7 @@ workflow:
 
 # Separate stages enforce strict order; no needs: [] bypasses the stage gate.
 stages:
+  - validate
   - bootstrap
   - preflight
   - verify_production
@@ -20,12 +21,52 @@ stages:
   - sync_test
   - verify_result
 
+# Set PROD_HOST, TEST_HOST, TEST_DB_HOST in protected GitLab CI/CD Variables.
+# DB names are checked against config/sync.yml. Values below are public policy,
+# not physical endpoints; keep any changes consistent with config/sync.yml.
 variables:
-  PROD_HOST: "2.29.51.66"
   PROD_DB: "workouts"
-  TEST_HOST: "192.168.1.37"
   TEST_DB: "workouts_test"
   STAGING_DB: "workouts_restore_staging"
+
+# Validate repository and Python logic before any host changes.
+validate_repository:
+  stage: validate
+  image: python:3.12-slim
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: on_success
+    - when: never
+  before_script:
+    - pip install --no-cache-dir 'PyYAML==6.0.2'
+  script:
+    - bash scripts/tests/static-checks.sh
+
+# Dedicated disposable PostgreSQL: no production/test credentials or host access.
+postgresql_integration:
+  stage: validate
+  image: postgres:17-alpine
+  services:
+    - name: postgres:17-alpine
+      alias: ephemeral-postgres
+  variables:
+    POSTGRES_PASSWORD: "ci_ephemeral_only"
+    POSTGRES_DB: "sync_integration"
+    PGHOST: "ephemeral-postgres"
+    PGPORT: "5432"
+    PGUSER: "postgres"
+    PGPASSWORD: "ci_ephemeral_only"
+    PGDATABASE: "sync_integration"
+    WORKOUTS_EPHEMERAL_PG: "1"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: on_success
+    - when: never
+  before_script:
+    - apk add --no-cache python3
+    - until pg_isready -h "$PGHOST" -U "$PGUSER"; do sleep 1; done
+  script:
+    - python3 -m unittest discover -s tests -p 'postgres_integration.py' -v
 
 # Provision the existing PostgreSQL 17 test host before any data flows.
 # Manual web pipeline is the single human approval; all jobs run automatically.
@@ -50,7 +91,7 @@ preflight:
   before_script:
     - pip install --no-cache-dir 'ansible-core==2.19.4'
   script:
-    - ansible-playbook -i ansible/inventory.ini -c local ansible/preflight.yml
+    - python3 scripts/ansible_run.py preflight
 
 # Streams a custom-format backup and validates its archive index.
 # It does not publish production data as a GitLab job artifact.

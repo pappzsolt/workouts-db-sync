@@ -3,12 +3,14 @@
   hosts: workouts_test
   gather_facts: false
   become: true
+  vars_files:
+    - ../config/sync.yml
   vars:
-    base: /usr/local/libexec/workouts-db-sync
-    restore_home: /home/workouts-db-restore
-    pg_bin: /usr/lib/postgresql/17/bin
-    pg_hba: /etc/postgresql/17/main/pg_hba.conf
-    pg_ident: /etc/postgresql/17/main/pg_ident.conf
+    base: "{{ sync_server_base }}"
+    restore_home: "{{ sync_receiver_home }}"
+    pg_bin: "{{ sync_pg_bin }}"
+    pg_hba: "{{ sync_pg_hba }}"
+    pg_ident: "{{ sync_pg_ident }}"
     restore_pubkey: "{{ lookup('env','WORKOUTS_RESTORE_PUBKEY') }}"
     ansible_become_password: "{{ lookup('env','ANSIBLE_BECOME_PASSWORD') }}"
   tasks:
@@ -30,7 +32,7 @@
 
     - name: Check test Workouts API Docker container exists
       ansible.builtin.command:
-        argv: [docker, inspect, workouts-api]
+        argv: [docker, inspect, "{{ sync_test_api }}"]
       register: workouts_container
       changed_when: false
 
@@ -79,6 +81,22 @@
         - receive-restore-candidate.sh
         - prepare-candidate.sh
         - sync-test.sh
+
+    - name: Create root-owned read-only SQL directory
+      ansible.builtin.file:
+        path: "{{ base }}/sql"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install version-controlled sequence reconciliation SQL
+      ansible.builtin.copy:
+        src: ../sql/reconcile-sequences.sql
+        dest: "{{ base }}/sql/reconcile-sequences.sql"
+        owner: root
+        group: root
+        mode: '0644'
 
     - name: Fix receiver key to forced dispatcher, no ports or PTY
       ansible.builtin.copy:
@@ -158,14 +176,14 @@
 
     - name: Check candidate database existence
       ansible.builtin.command:
-        argv: ["runuser", "-u", "postgres", "--", "{{ pg_bin }}/psql", "-X", "-A", "-t", "-d", "postgres", "-c", "SELECT count(*) FROM pg_database WHERE datname='workouts_restore_candidate'"]
+        argv: ["runuser", "-u", "postgres", "--", "{{ pg_bin }}/psql", "-X", "-A", "-t", "-d", "postgres", "-c", "SELECT count(*) FROM pg_database WHERE datname='{{ sync_candidate_db }}'"]
       become_user: root
       register: candidate_exists
       changed_when: false
 
     - name: Create candidate owned by restricted loader on first bootstrap
       ansible.builtin.command:
-        argv: ["runuser", "-u", "postgres", "--", "{{ pg_bin }}/createdb", "-O", "workouts_restore_loader", "workouts_restore_candidate"]
+        argv: ["runuser", "-u", "postgres", "--", "{{ pg_bin }}/createdb", "-O", "workouts_restore_loader", "{{ sync_candidate_db }}"]
       become_user: root
       when: candidate_exists.stdout | trim == '0'
 
@@ -183,14 +201,14 @@
           - -d
           - postgres
           - -c
-          - "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname='workouts_restore_candidate'"
+          - "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname='{{ sync_candidate_db }}'"
       register: candidate_owner
       changed_when: false
       failed_when: candidate_owner.rc != 0 or candidate_owner.stdout | trim == ''
 
     - name: Set candidate owner only if needed
       ansible.builtin.command:
-        argv: ["runuser", "-u", "postgres", "--", "{{ pg_bin }}/psql", "-X", "-v", "ON_ERROR_STOP=1", "-d", "postgres", "-c", "ALTER DATABASE workouts_restore_candidate OWNER TO workouts_restore_loader"]
+        argv: ["runuser", "-u", "postgres", "--", "{{ pg_bin }}/psql", "-X", "-v", "ON_ERROR_STOP=1", "-d", "postgres", "-c", "ALTER DATABASE {{ sync_candidate_db }} OWNER TO workouts_restore_loader"]
       when: candidate_owner.stdout | trim != 'workouts_restore_loader'
 
     - name: Permit only mapped receiver to log in as restore loader (highest HBA priority)
@@ -200,7 +218,7 @@
         backup: true
         marker: '# {mark} WORKOUTS-DB-SYNC MANAGED'
         block: |
-          local   workouts_restore_candidate workouts_restore_loader peer map=workouts_restore_map
+          local   {{ sync_candidate_db }} workouts_restore_loader peer map=workouts_restore_map
           local   all                        workouts_restore_loader reject
           host    all                        workouts_restore_loader 0.0.0.0/0 reject
           host    all                        workouts_restore_loader ::/0 reject
@@ -220,13 +238,13 @@
 
     - name: Ensure dblink is installed in candidate by PostgreSQL administrator
       ansible.builtin.command:
-        argv: ["runuser", "-u", "postgres", "--", "{{ pg_bin }}/psql", "-X", "-v", "ON_ERROR_STOP=1", "-d", "workouts_restore_candidate", "-c", "CREATE EXTENSION IF NOT EXISTS dblink WITH SCHEMA public"]
+        argv: ["runuser", "-u", "postgres", "--", "{{ pg_bin }}/psql", "-X", "-v", "ON_ERROR_STOP=1", "-d", "{{ sync_candidate_db }}", "-c", "CREATE EXTENSION IF NOT EXISTS dblink WITH SCHEMA public"]
       become_user: root
       changed_when: false
 
     - name: Validate restricted candidate connection as actual receiver OS user
       ansible.builtin.command:
-        argv: ["runuser", "-u", "workouts-db-restore", "--", "{{ pg_bin }}/psql", "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-U", "workouts_restore_loader", "-d", "workouts_restore_candidate", "-c", "SELECT current_user"]
+        argv: ["runuser", "-u", "workouts-db-restore", "--", "{{ pg_bin }}/psql", "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-U", "workouts_restore_loader", "-d", "{{ sync_candidate_db }}", "-c", "SELECT current_user"]
       become_user: root
       register: candidate_login
       changed_when: false

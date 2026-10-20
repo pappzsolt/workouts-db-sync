@@ -1,5 +1,8 @@
 # Database dumps and local secrets must never be committed.
 *.sql
+# Only reviewed, version-controlled SQL under sql/ is permitted.
+!sql/
+!sql/*.sql
 *.dump
 *.backup
 *.pgpass
@@ -9,3 +12,6 @@
 *.pem
 id_*
 .idea/
+
+__pycache__/
+*.py[cod]
