@@ -31,7 +31,7 @@ TABLES="$("$PG/psql" -X -q -A -t -v ON_ERROR_STOP=1 \
 # No --create, no --clean, no superuser. Atomic rollback on restore error.
 "$PG/pg_restore" -h /var/run/postgresql -p 5432 \
   -U workouts_restore_loader -d "$TARGET" \
-  --no-owner --no-acl --single-transaction --exit-on-error "$BACKUP"
+  --no-owner --no-acl --no-comments --single-transaction --exit-on-error "$BACKUP"
 
 TABLES="$("$PG/psql" -X -q -A -t -v ON_ERROR_STOP=1 \
   -h /var/run/postgresql -p 5432 -U workouts_restore_loader -d "$TARGET" \
