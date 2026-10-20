@@ -140,6 +140,18 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'Candidate cleanup left database objects';
   END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.pg_proc p
+    JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
+    WHERE n.nspname='public'
+      AND NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_depend d
+        WHERE d.classid='pg_catalog.pg_proc'::regclass
+          AND d.objid=p.oid AND d.deptype='e'
+      )
+  ) THEN
+    RAISE EXCEPTION 'Candidate cleanup left non-extension routines';
+  END IF;
 END;
 \$verify\$;
 COMMIT;

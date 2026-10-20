@@ -14,13 +14,14 @@ if ! grep -Fq -- "$KEY" "$AUTH"; then
 fi
 
 SCRIPTDIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-for script in restore-dispatch.sh receive-restore-candidate.sh sync-test.sh; do
+for script in restore-dispatch.sh receive-restore-candidate.sh sync-test.sh prepare-candidate.sh; do
   bash -n "$SCRIPTDIR/$script"
   install -o root -g root -m 755 "$SCRIPTDIR/$script" "$BASE/$script"
 done
 
 # Install narrow sudo permission ONLY for the root-controlled fixed sync command.
-printf 'workouts-db-restore ALL=(root) NOPASSWD: %s/sync-test.sh\n' "$BASE" > /etc/sudoers.d/workouts-db-sync-test
+printf 'workouts-db-restore ALL=(root) NOPASSWD: %s/sync-test.sh, %s/prepare-candidate.sh\n' \
+  "$BASE" "$BASE" > /etc/sudoers.d/workouts-db-sync-test
 chmod 440 /etc/sudoers.d/workouts-db-sync-test
 visudo -cf /etc/sudoers.d/workouts-db-sync-test >/dev/null
 

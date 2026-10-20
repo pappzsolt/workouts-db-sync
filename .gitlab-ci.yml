@@ -10,6 +10,7 @@ stages:
   - verify_production
   - backup_test
   - verify_transport
+  - prepare_candidate
   - restore_candidate
   - sync_test
 
@@ -72,6 +73,21 @@ verify_test_restore_ssh:
     - apk add --no-cache openssh-client bash
   script:
     - bash scripts/verify-test-restore-ssh.sh
+
+# Before every restore, remove orphaned routines/sequences left by an older
+# candidate cleanup. Refuses to destroy a candidate containing business tables.
+prepare_candidate:
+  stage: prepare_candidate
+  image: alpine:3.20
+  resource_group: workouts-production-to-test-ssh
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: on_success
+    - when: never
+  before_script:
+    - apk add --no-cache openssh-client bash
+  script:
+    - bash scripts/prepare-candidate.sh
 
 # Restricted production restore to an EMPTY workouts_restore_candidate ONLY.
 # A successful test sync clears the candidate for the next pipeline.
