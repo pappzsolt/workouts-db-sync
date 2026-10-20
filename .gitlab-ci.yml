@@ -69,3 +69,19 @@ verify_test_restore_ssh:
     - apk add --no-cache openssh-client bash
   script:
     - bash scripts/verify-test-restore-ssh.sh
+
+# One-time, restricted production restore to workouts_restore_candidate ONLY.
+# No artifacts, no direct writes to workouts_test or workouts_restore_staging.
+restore_production_to_candidate:
+  stage: backup
+  image: postgres:17-alpine
+  needs: []
+  resource_group: workouts-production-to-test-ssh
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual
+      allow_failure: false
+  before_script:
+    - apk add --no-cache openssh-client bash
+  script:
+    - bash scripts/restore-production-to-candidate.sh
