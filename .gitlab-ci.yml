@@ -1,0 +1,24 @@
+# Isolated Workouts production -> test database synchronization project.
+# Phase 1: read-only preflight. No database writes or remote commands.
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - when: never
+
+stages:
+  - preflight
+
+preflight:
+  stage: preflight
+  image: alpine:3.20
+  rules:
+    - when: manual
+      allow_failure: false
+  variables:
+    PROD_HOST: "2.29.51.66"
+    PROD_DB: "workouts"
+    TEST_HOST: "192.168.1.37"
+    TEST_DB: "workouts_test"
+    STAGING_DB: "workouts_restore_staging"
+  script:
+    - sh scripts/preflight.sh

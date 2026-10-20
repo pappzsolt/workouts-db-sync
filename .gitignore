@@ -1,0 +1,10 @@
+# Database dumps and local secrets must never be committed.
+*.sql
+*.dump
+*.backup
+*.pgpass
+.env
+.env.*
+!.env.example
+*.pem
+id_*
