@@ -1,5 +1,4 @@
-# Isolated Workouts production -> test database synchronization project.
-# Phase 1: read-only preflight. No database writes or remote commands.
+# Workouts production -> test DB sync. All operations require manual jobs.
 workflow:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "web"'
@@ -7,6 +6,15 @@ workflow:
 
 stages:
   - preflight
+  - provision
+  - backup
+
+variables:
+  PROD_HOST: "2.29.51.66"
+  PROD_DB: "workouts"
+  TEST_HOST: "192.168.1.37"
+  TEST_DB: "workouts_test"
+  STAGING_DB: "workouts_restore_staging"
 
 preflight:
   stage: preflight
@@ -14,11 +22,37 @@ preflight:
   rules:
     - when: manual
       allow_failure: false
-  variables:
-    PROD_HOST: "2.29.51.66"
-    PROD_DB: "workouts"
-    TEST_HOST: "192.168.1.37"
-    TEST_DB: "workouts_test"
-    STAGING_DB: "workouts_restore_staging"
   script:
     - sh scripts/preflight.sh
+
+# One-time installation, requires separately authorized deploy SSH credentials.
+# The deploy account must have explicitly scoped sudo rights; NOT Docker group.
+provision_production_backup:
+  stage: provision
+  image: alpine:3.20
+  needs: []
+  resource_group: workouts-production-backup-provision
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual
+      allow_failure: false
+  before_script:
+    - apk add --no-cache openssh-client
+  script:
+    - sh scripts/provision-production-backup.sh
+
+# Streams a custom-format backup and validates its archive index.
+# It does not publish production data as a GitLab job artifact.
+verify_production_backup:
+  stage: backup
+  image: postgres:17-alpine
+  needs: []
+  resource_group: workouts-production-backup
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual
+      allow_failure: false
+  before_script:
+    - apk add --no-cache openssh-client
+  script:
+    - sh scripts/verify-production-backup.sh
