@@ -12,18 +12,32 @@
     restore_pubkey: "{{ lookup('env','WORKOUTS_RESTORE_PUBKEY') }}"
     ansible_become_password: "{{ lookup('env','ANSIBLE_BECOME_PASSWORD') }}"
   tasks:
-    - name: Check prerequisites, never install or modify application infrastructure
-      ansible.builtin.shell: |
-        set -eu
-        test -x /usr/lib/postgresql/17/bin/psql
-        test -f /etc/postgresql/17/main/pg_hba.conf
-        command -v docker >/dev/null
-        docker inspect workouts-api >/dev/null
-        id postgres >/dev/null
-        command -v visudo >/dev/null
-      args:
-        executable: /bin/sh
+    - name: Check required PostgreSQL and sudo files
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ pg_bin }}/psql"
+        - "{{ pg_hba }}"
+        - "{{ pg_ident }}"
+        - /usr/sbin/visudo
+      register: bootstrap_prerequisites
+
+    - name: Refuse bootstrap on an incomplete PostgreSQL 17 host
+      ansible.builtin.assert:
+        that:
+          - bootstrap_prerequisites.results | selectattr('stat.exists', 'equalto', false) | list | length == 0
+        fail_msg: 'PostgreSQL 17 or sudo prerequisites are missing; not installing infrastructure.'
+
+    - name: Check test Workouts API Docker container exists
+      ansible.builtin.command:
+        argv: [docker, inspect, workouts-api]
+      register: workouts_container
       changed_when: false
+
+    - name: Check PostgreSQL system account exists
+      ansible.builtin.getent:
+        database: passwd
+        key: postgres
 
     - name: Create dedicated OS SSH receiver (without shell access over authorized key)
       ansible.builtin.user:
@@ -88,18 +102,59 @@
 
     # SSH is pappzs; become root via sudo, then use runuser for local peer auth.
     # Avoid Ansible temp-file ACL issues when becoming a second unprivileged user.
-    - name: Ensure restricted PostgreSQL loader exists
-      ansible.builtin.shell: |
-        set -eu
-        runuser -u postgres -- {{ pg_bin }}/psql -X -v ON_ERROR_STOP=1 -d postgres <<'SQL'
-        DO $$ BEGIN
-          IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='workouts_restore_loader') THEN
-            CREATE ROLE workouts_restore_loader LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
-          END IF;
-        END $$;
-        SQL
-      become_user: root
+    - name: Query existing PostgreSQL loader role
+      ansible.builtin.command:
+        argv:
+          - runuser
+          - -u
+          - postgres
+          - --
+          - "{{ pg_bin }}/psql"
+          - -XAt
+          - -v
+          - ON_ERROR_STOP=1
+          - -d
+          - postgres
+          - -c
+          - "SELECT count(*) FROM pg_roles WHERE rolname='workouts_restore_loader'"
+      register: restore_loader_exists
       changed_when: false
+
+    - name: Create restricted loader role only when missing
+      ansible.builtin.command:
+        argv:
+          - runuser
+          - -u
+          - postgres
+          - --
+          - "{{ pg_bin }}/psql"
+          - -X
+          - -v
+          - ON_ERROR_STOP=1
+          - -d
+          - postgres
+          - -c
+          - CREATE ROLE workouts_restore_loader LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION
+      when: restore_loader_exists.stdout | trim == '0'
+
+    - name: Assert existing loader cannot administer other databases
+      ansible.builtin.command:
+        argv:
+          - runuser
+          - -u
+          - postgres
+          - --
+          - "{{ pg_bin }}/psql"
+          - -XAt
+          - -v
+          - ON_ERROR_STOP=1
+          - -d
+          - postgres
+          - -c
+          - "SELECT NOT (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls) FROM pg_roles WHERE rolname='workouts_restore_loader'"
+      register: loader_restricted
+      changed_when: false
+      failed_when: loader_restricted.rc != 0 or loader_restricted.stdout | trim != 't'
 
     - name: Check candidate database existence
       ansible.builtin.command:
