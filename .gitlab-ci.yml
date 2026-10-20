@@ -53,3 +53,19 @@ backup_test_database:
       allow_failure: false
   script:
     - sh scripts/backup-test-database.sh
+
+# Proves the restricted test SSH receiver accepts a streamed production dump.
+# The receiver validates the archive and deletes it; no database is restored.
+verify_test_restore_ssh:
+  stage: backup
+  image: postgres:17-alpine
+  needs: []
+  resource_group: workouts-production-to-test-ssh
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual
+      allow_failure: false
+  before_script:
+    - apk add --no-cache openssh-client bash
+  script:
+    - bash scripts/verify-test-restore-ssh.sh
