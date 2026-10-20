@@ -86,36 +86,38 @@
         mode: '0440'
         validate: '/usr/sbin/visudo -cf %s'
 
+    # SSH is pappzs; become root via sudo, then use runuser for local peer auth.
+    # Avoid Ansible temp-file ACL issues when becoming a second unprivileged user.
     - name: Ensure restricted PostgreSQL loader exists
       ansible.builtin.shell: |
         set -eu
-        {{ pg_bin }}/psql -X -v ON_ERROR_STOP=1 -d postgres <<'SQL'
+        runuser -u postgres -- {{ pg_bin }}/psql -X -v ON_ERROR_STOP=1 -d postgres <<'SQL'
         DO $$ BEGIN
           IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='workouts_restore_loader') THEN
             CREATE ROLE workouts_restore_loader LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
           END IF;
         END $$;
         SQL
-      become_user: postgres
+      become_user: root
       changed_when: false
 
     - name: Check candidate database existence
       ansible.builtin.command:
-        argv: ["{{ pg_bin }}/psql", "-X", "-A", "-t", "-d", "postgres", "-c", "SELECT count(*) FROM pg_database WHERE datname='workouts_restore_candidate'"]
-      become_user: postgres
+        argv: ["runuser", "-u", "postgres", "--", "{{ pg_bin }}/psql", "-X", "-A", "-t", "-d", "postgres", "-c", "SELECT count(*) FROM pg_database WHERE datname='workouts_restore_candidate'"]
+      become_user: root
       register: candidate_exists
       changed_when: false
 
     - name: Create candidate owned by restricted loader on first bootstrap
       ansible.builtin.command:
-        argv: ["{{ pg_bin }}/createdb", "-O", "workouts_restore_loader", "workouts_restore_candidate"]
-      become_user: postgres
+        argv: ["runuser", "-u", "postgres", "--", "{{ pg_bin }}/createdb", "-O", "workouts_restore_loader", "workouts_restore_candidate"]
+      become_user: root
       when: candidate_exists.stdout | trim == '0'
 
     - name: Ensure owner is restricted loader (candidate only)
       ansible.builtin.command:
-        argv: ["{{ pg_bin }}/psql", "-X", "-v", "ON_ERROR_STOP=1", "-d", "postgres", "-c", "ALTER DATABASE workouts_restore_candidate OWNER TO workouts_restore_loader"]
-      become_user: postgres
+        argv: ["runuser", "-u", "postgres", "--", "{{ pg_bin }}/psql", "-X", "-v", "ON_ERROR_STOP=1", "-d", "postgres", "-c", "ALTER DATABASE workouts_restore_candidate OWNER TO workouts_restore_loader"]
+      become_user: root
       changed_when: false
 
     - name: Permit only mapped receiver to log in as restore loader (highest HBA priority)
@@ -145,14 +147,14 @@
 
     - name: Ensure dblink is installed in candidate by PostgreSQL administrator
       ansible.builtin.command:
-        argv: ["{{ pg_bin }}/psql", "-X", "-v", "ON_ERROR_STOP=1", "-d", "workouts_restore_candidate", "-c", "CREATE EXTENSION IF NOT EXISTS dblink WITH SCHEMA public"]
-      become_user: postgres
+        argv: ["runuser", "-u", "postgres", "--", "{{ pg_bin }}/psql", "-X", "-v", "ON_ERROR_STOP=1", "-d", "workouts_restore_candidate", "-c", "CREATE EXTENSION IF NOT EXISTS dblink WITH SCHEMA public"]
+      become_user: root
       changed_when: false
 
     - name: Validate restricted candidate connection as actual receiver OS user
       ansible.builtin.command:
-        argv: ["{{ pg_bin }}/psql", "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-U", "workouts_restore_loader", "-d", "workouts_restore_candidate", "-c", "SELECT current_user"]
-      become_user: workouts-db-restore
+        argv: ["runuser", "-u", "workouts-db-restore", "--", "{{ pg_bin }}/psql", "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-U", "workouts_restore_loader", "-d", "workouts_restore_candidate", "-c", "SELECT current_user"]
+      become_user: root
       register: candidate_login
       changed_when: false
       failed_when: candidate_login.rc != 0 or candidate_login.stdout | trim != 'workouts_restore_loader'
@@ -165,6 +167,7 @@
       failed_when: not installed.stat.exists
   handlers:
     - name: Reload PostgreSQL
-      ansible.builtin.command: "{{ pg_bin }}/psql -X -v ON_ERROR_STOP=1 -d postgres -c 'SELECT pg_reload_conf()'"
-      become_user: postgres
+      ansible.builtin.command:
+        argv: ['runuser', '-u', 'postgres', '--', '{{ pg_bin }}/psql', '-X', '-v', 'ON_ERROR_STOP=1', '-d', 'postgres', '-c', 'SELECT pg_reload_conf()']
+      become_user: root
       changed_when: true
