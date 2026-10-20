@@ -18,6 +18,7 @@ stages:
   - prepare_candidate
   - restore_candidate
   - sync_test
+  - verify_result
 
 variables:
   PROD_HOST: "2.29.51.66"
@@ -44,10 +45,12 @@ ansible_bootstrap:
 
 preflight:
   stage: preflight
-  image: alpine:3.20
+  image: python:3.12-slim
   rules: *main_auto_rules
+  before_script:
+    - pip install --no-cache-dir 'ansible-core==2.19.4'
   script:
-    - sh scripts/preflight.sh
+    - ansible-playbook -i localhost, -c local ansible/preflight.yml
 
 # Streams a custom-format backup and validates its archive index.
 # It does not publish production data as a GitLab job artifact.
@@ -129,3 +132,15 @@ sync_candidate_to_test:
     - apk add --no-cache openssh-client bash
   script:
     - bash scripts/sync-candidate-to-test.sh
+
+# Independent, read-only verification that cleanup and test restart succeeded.
+verify_sync_result:
+  stage: verify_result
+  image: python:3.12-slim
+  resource_group: workouts-production-to-test-ssh
+  rules: *main_auto_rules
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends openssh-client >/dev/null
+    - pip install --no-cache-dir 'ansible-core==2.19.4'
+  script:
+    - bash scripts/ansible-bootstrap.sh verify

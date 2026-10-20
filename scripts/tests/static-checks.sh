@@ -15,5 +15,10 @@ assert cfg['workflow']['rules'][0]['when']=='always'
 assert cfg['restore_production_to_candidate']['rules'][0]['when']=='manual'
 assert cfg['sync_candidate_to_test']['stage']=='sync_test'
 assert cfg['verify_production_backup']['script']==['bash scripts/verify-production-backup.sh']
+assert cfg['preflight']['script']==['ansible-playbook -i localhost, -c local ansible/preflight.yml']
+assert cfg['verify_sync_result']['stage']=='verify_result'
+for item in ('ansible/preflight.yml', 'ansible/verify-result.yml', 'ansible/bootstrap.yml'):
+    with open(f'{sys.argv[1].rsplit("/",1)[0]}/{item}', encoding='utf-8') as source:
+        yaml.safe_load(source)
 print('Bash syntax and CI YAML validation OK')
 PYTEST

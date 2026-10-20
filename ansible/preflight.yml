@@ -1,0 +1,28 @@
+---
+- name: Validate production-to-test configuration without touching servers
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ci_project: "{{ lookup('env', 'CI_PROJECT_PATH') }}"
+    ci_branch: "{{ lookup('env', 'CI_COMMIT_BRANCH') }}"
+    prod_host: "{{ lookup('env', 'PROD_HOST') }}"
+    test_host: "{{ lookup('env', 'TEST_HOST') }}"
+    prod_db: "{{ lookup('env', 'PROD_DB') }}"
+    test_db: "{{ lookup('env', 'TEST_DB') }}"
+    staging_db: "{{ lookup('env', 'STAGING_DB') }}"
+  tasks:
+    - name: Enforce fixed project, branch, endpoints and databases
+      ansible.builtin.assert:
+        that:
+          - ci_project == 'workouts/workouts-db-sync'
+          - ci_branch == 'main'
+          - prod_host == '2.29.51.66'
+          - test_host == '192.168.1.37'
+          - prod_host != test_host
+          - prod_db == 'workouts'
+          - test_db == 'workouts_test'
+          - staging_db == 'workouts_restore_staging'
+          - prod_db != test_db
+        fail_msg: 'Refusing to operate with unexpected CI/CD identity or target.'
+        success_msg: 'Read-only preflight configuration checks passed.'

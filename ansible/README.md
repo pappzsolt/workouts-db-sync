@@ -28,3 +28,12 @@ to `workouts_restore_candidate` during bootstrap.
 
 No database dumps are stored as GitLab artifacts. Server-side `sync-test.sh`
 retains the pre-sync `workouts_test` backup in `/var/backups/workouts-db-sync`.
+
+## Refactored Ansible execution
+
+- `ansible/preflight.yml` checks repository and fixed database targets locally, without SSH.
+- `ansible/bootstrap.yml` provisions the existing PostgreSQL 17 test server via a restricted administrative CI identity.
+- `ansible/verify-result.yml` performs **read-only** post-sync checks of the candidate cleanup, preserved `dblink`, test data, Liquibase records and API status.
+- `scripts/ansible-bootstrap.sh` is the single minimal credential/SSH launcher for the two remote Ansible playbooks.
+
+The four SSH transfer/restore wrappers and fixed-purpose server scripts are deliberately retained: they use SSH forced commands and narrow sudo permissions. Do not replace them with general-purpose administrative Ansible connections during actual data transfer.
