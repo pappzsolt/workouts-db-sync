@@ -82,7 +82,8 @@ TABLE_SQL="${TABLE_SQL%, }"
 {
   printf "SET LOCAL lock_timeout = '15s';\nSET LOCAL statement_timeout = '15min';\n"
   printf 'TRUNCATE TABLE %s RESTART IDENTITY;\n' "$TABLE_SQL"
-  cat "$SQLFILE"
+  # Remove pg_dump's empty search_path setting so triggers can resolve public tables.
+  sed "/^SELECT pg_catalog.set_config('search_path', '', false);$/d" "$SQLFILE"
   # Production login state must not become valid in test.
   printf '\nTRUNCATE TABLE public.auth_login_attempts, public.login_audit_logs, public.password_reset_tokens, public.password_reset_email_outbox, public.refresh_token_revocations, public.refresh_token_families, public.account_token_versions RESTART IDENTITY;\n'
   # All owned serial/identity sequences are reconciled to imported row IDs.
