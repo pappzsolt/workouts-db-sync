@@ -120,5 +120,31 @@ chmod 600 "${SQLFILE}.transaction"
 pg "$PG/psql" -X -v ON_ERROR_STOP=1 -q -1 -d "$DST" -f "${SQLFILE}.transaction"
 rm -f -- "${SQLFILE}.transaction"
 
+# Only after the test transaction COMMITTED, clear the candidate for reuse.
+# Transactional DDL: all schema objects are removed together or none are.
+# Keep the dblink extension preinstalled so the non-superuser restore loader
+# can restore the next production dump without CREATE EXTENSION privileges.
+# The restored test DB and its durable on-host backup are untouched here.
+echo 'Test sync committed; clearing candidate for the next pipeline.'
+pg "$PG/psql" -X -v ON_ERROR_STOP=1 -q -1 -d "$SRC" -c "
+BEGIN;
+DROP SCHEMA public CASCADE;
+CREATE SCHEMA public AUTHORIZATION pg_database_owner;
+CREATE EXTENSION IF NOT EXISTS dblink WITH SCHEMA public;
+DO \$verify\$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.pg_class c
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind IN ('r','p','v','m','S','f')
+  ) THEN
+    RAISE EXCEPTION 'Candidate cleanup left database objects';
+  END IF;
+END;
+\$verify\$;
+COMMIT;
+"
+echo 'Candidate cleared; dblink remains available for the next restore.'
+
 echo "Test database sync succeeded: ${#TABLES[@]} source tables, preserved Liquibase and test-only tables."
 echo 'Production sessions, login attempts and outgoing password-reset mail queue cleared in test.'

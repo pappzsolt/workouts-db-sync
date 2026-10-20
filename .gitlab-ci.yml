@@ -1,12 +1,17 @@
-# Workouts production -> test DB sync. All operations require manual jobs.
+# Workouts production -> test DB sync. Manually start a web pipeline on main; jobs run in order.
 workflow:
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - if: '$CI_PIPELINE_SOURCE == "web" && $CI_COMMIT_BRANCH == "main"'
     - when: never
 
+# Separate stages enforce strict order; no needs: [] bypasses the stage gate.
 stages:
   - preflight
-  - backup
+  - verify_production
+  - backup_test
+  - verify_transport
+  - restore_candidate
+  - sync_test
 
 variables:
   PROD_HOST: "2.29.51.66"
@@ -19,22 +24,22 @@ preflight:
   stage: preflight
   image: alpine:3.20
   rules:
-    - when: manual
-      allow_failure: false
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: on_success
+    - when: never
   script:
     - sh scripts/preflight.sh
 
 # Streams a custom-format backup and validates its archive index.
 # It does not publish production data as a GitLab job artifact.
 verify_production_backup:
-  stage: backup
+  stage: verify_production
   image: postgres:17-alpine
-  needs: []
   resource_group: workouts-production-backup
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
-      when: manual
-      allow_failure: false
+      when: on_success
+    - when: never
   before_script:
     - apk add --no-cache openssh-client
   script:
@@ -43,61 +48,59 @@ verify_production_backup:
 # Read-only test database backup, verified in the job and then deleted.
 # No database dump is stored as a GitLab artifact.
 backup_test_database:
-  stage: backup
+  stage: backup_test
   image: postgres:17-alpine
-  needs: []
   resource_group: workouts-test-backup
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
-      when: manual
-      allow_failure: false
+      when: on_success
+    - when: never
   script:
     - sh scripts/backup-test-database.sh
 
 # Proves the restricted test SSH receiver accepts a streamed production dump.
 # The receiver validates the archive and deletes it; no database is restored.
 verify_test_restore_ssh:
-  stage: backup
+  stage: verify_transport
   image: postgres:17-alpine
-  needs: []
   resource_group: workouts-production-to-test-ssh
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
-      when: manual
-      allow_failure: false
+      when: on_success
+    - when: never
   before_script:
     - apk add --no-cache openssh-client bash
   script:
     - bash scripts/verify-test-restore-ssh.sh
 
-# One-time, restricted production restore to workouts_restore_candidate ONLY.
+# Restricted production restore to an EMPTY workouts_restore_candidate ONLY.
+# A successful test sync clears the candidate for the next pipeline.
 # No artifacts, no direct writes to workouts_test or workouts_restore_staging.
 restore_production_to_candidate:
-  stage: backup
+  stage: restore_candidate
   image: postgres:17-alpine
-  needs: []
   resource_group: workouts-production-to-test-ssh
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
-      when: manual
-      allow_failure: false
+      when: on_success
+    - when: never
   before_script:
     - apk add --no-cache openssh-client bash
   script:
     - bash scripts/restore-production-to-candidate.sh
 
-# Explicitly approved test data refresh from the previously verified candidate.
+# Test data refresh from the candidate restored by the preceding stage.
 # The server takes a durable backup, pauses ONLY the test API and performs
 # a single-transaction data copy preserving Liquibase and test-only records.
+# After a successful sync the server removes candidate data (keeps dblink).
 sync_candidate_to_test:
-  stage: backup
+  stage: sync_test
   image: alpine:3.20
-  needs: []
   resource_group: workouts-production-to-test-ssh
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
-      when: manual
-      allow_failure: false
+      when: on_success
+    - when: never
   before_script:
     - apk add --no-cache openssh-client bash
   script:
