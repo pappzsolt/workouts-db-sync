@@ -1,20 +1,13 @@
 #!/usr/bin/env bash
 # Fixed-target privileged maintenance action. Installed root:root 0755.
 set -Eeuo pipefail
-umask 077
-[[ "$(id -u)" == 0 ]] || { echo 'ERROR: root required' >&2; exit 1; }
-PG='/usr/lib/postgresql/17/bin'
-SRC='workouts_restore_candidate'
-DST='workouts_test'
+source /usr/local/libexec/workouts-db-sync/common.sh
+require_root
+lock_candidate
+SRC="$CANDIDATE"
+DST="$TEST_DB"
 BACKUP_DIR='/var/backups/workouts-db-sync'
-LOCK='/run/lock/workouts-db-sync-test.lock'
 API='workouts-api'
-exec 9>"$LOCK"
-flock -n 9 || { echo 'ERROR: Another test sync is running' >&2; exit 1; }
-
-# Exactly these three test-system tables must never be copied from production.
-pg() { runuser -u postgres -- "$@"; }
-q() { pg "$PG/psql" -X -A -t -q -v ON_ERROR_STOP=1 -d "$1" -c "$2"; }
 
 # Fail closed on unexpected schema drift; never guess which new tables to copy.
 mapfile -t TABLES < <(q "$SRC" "SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname='public' AND tablename NOT IN ('databasechangelog','databasechangeloglock','login_rate_limits') ORDER BY tablename")
@@ -111,36 +104,7 @@ done
 # can restore the next production dump without CREATE EXTENSION privileges.
 # The restored test DB and its durable on-host backup are untouched here.
 echo 'Test sync committed; clearing candidate for the next pipeline.'
-pg "$PG/psql" -X -v ON_ERROR_STOP=1 -q -1 -d "$SRC" -c "
-BEGIN;
-DROP SCHEMA public CASCADE;
-CREATE SCHEMA public AUTHORIZATION pg_database_owner;
-CREATE EXTENSION IF NOT EXISTS dblink WITH SCHEMA public;
-DO \$verify\$
-BEGIN
-  IF EXISTS (
-    SELECT 1 FROM pg_catalog.pg_class c
-    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'public' AND c.relkind IN ('r','p','v','m','S','f')
-  ) THEN
-    RAISE EXCEPTION 'Candidate cleanup left database objects';
-  END IF;
-  IF EXISTS (
-    SELECT 1 FROM pg_catalog.pg_proc p
-    JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
-    WHERE n.nspname='public'
-      AND NOT EXISTS (
-        SELECT 1 FROM pg_catalog.pg_depend d
-        WHERE d.classid='pg_catalog.pg_proc'::regclass
-          AND d.objid=p.oid AND d.deptype='e'
-      )
-  ) THEN
-    RAISE EXCEPTION 'Candidate cleanup left non-extension routines';
-  END IF;
-END;
-\$verify\$;
-COMMIT;
-"
+pg "$PG/psql" -X -v ON_ERROR_STOP=1 -q -1 -d "$SRC" -f "$BASE/sql/reset-candidate.sql"
 echo 'Candidate cleared; dblink remains available for the next restore.'
 
 echo "Test database sync succeeded: ${#TABLES[@]} source tables, preserved Liquibase and test-only tables."

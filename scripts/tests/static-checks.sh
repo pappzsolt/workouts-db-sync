@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 while IFS= read -r -d '' file; do bash -n "$file"; done < <(find "$ROOT/scripts" -type f -name '*.sh' -print0)
-python3 -m py_compile "$ROOT/scripts/db_sync.py" "$ROOT/scripts/ansible_run.py"
+python3 -m compileall -q "$ROOT/scripts" "$ROOT/tests"
 python3 - "$ROOT/.gitlab-ci.yml" <<'PYTEST'
 import sys
 try:
@@ -21,6 +21,7 @@ assert cfg['ansible_bootstrap']['script']==['python3 scripts/ansible_run.py boot
 assert cfg['verify_sync_result']['script']==['python3 scripts/ansible_run.py verify']
 assert cfg['verify_sync_result']['stage']=='verify_result'
 assert cfg['validate_repository']['stage']=='validate'
+assert cfg['stages'].index('preflight') < cfg['stages'].index('bootstrap')
 assert cfg['postgresql_integration']['stage']=='validate'
 assert 'PROD_HOST' not in cfg.get('variables', {})
 assert 'TEST_HOST' not in cfg.get('variables', {})

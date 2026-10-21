@@ -1,5 +1,5 @@
 ---
-- name: Validate controlled sync configuration and connectivity without changing servers
+- name: Validate CI-provided endpoints, database policy and connectivity without changing servers
   hosts: localhost
   connection: local
   gather_facts: false
@@ -8,10 +8,14 @@
   vars:
     ci_project: "{{ lookup('env', 'CI_PROJECT_PATH') }}"
     ci_branch: "{{ lookup('env', 'CI_COMMIT_BRANCH') }}"
-    prod_host: "{{ lookup('env', 'PROD_HOST') }}"
-    test_host: "{{ lookup('env', 'TEST_HOST') }}"
+    prod_host: "{{ lookup('env', 'PROD_HOST') | trim }}"
+    test_host: "{{ lookup('env', 'TEST_HOST') | trim }}"
+    database_policy:
+      PROD_DB: "{{ sync_production_db }}"
+      TEST_DB: "{{ sync_test_db }}"
+      STAGING_DB: "{{ sync_staging_db }}"
   tasks:
-    - name: Verify project, branch, database names and independent endpoints
+    - name: Verify project, branch and independent targets
       ansible.builtin.assert:
         that:
           - ci_project == sync_project
@@ -19,12 +23,20 @@
           - prod_host | length > 0
           - test_host | length > 0
           - prod_host != test_host
-          - lookup('env', 'PROD_DB') == sync_production_db
-          - lookup('env', 'TEST_DB') == sync_test_db
-          - lookup('env', 'STAGING_DB') == sync_staging_db
           - sync_production_db != sync_test_db
           - sync_candidate_db not in [sync_production_db, sync_test_db, sync_staging_db]
         fail_msg: 'Project, database policy, or non-secret endpoint configuration mismatch.'
+      tags: [policy]
+
+    - name: Verify database variables match repository policy
+      ansible.builtin.assert:
+        that:
+          - lookup('env', item.key) == item.value
+        fail_msg: "{{ item.key }} does not match the database policy."
+      loop: "{{ database_policy | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      tags: [policy]
 
     - name: Verify generated inventory matches the configured two endpoints
       ansible.builtin.assert:
@@ -34,6 +46,7 @@
           - hostvars[groups['workouts_production'][0]].ansible_host == prod_host
           - hostvars[groups['workouts_test'][0]].ansible_host == test_host
         fail_msg: 'Dynamic inventory is missing or points to unexpected endpoints.'
+      tags: [policy]
 
     - name: Check SSH TCP reachability without logging into production
       ansible.builtin.wait_for:
@@ -43,3 +56,4 @@
         timeout: 20
         state: started
       loop: "{{ groups['workouts_production'] + groups['workouts_test'] }}"
+      tags: [connectivity]

@@ -11,8 +11,8 @@ workflow:
 # Separate stages enforce strict order; no needs: [] bypasses the stage gate.
 stages:
   - validate
-  - bootstrap
   - preflight
+  - bootstrap
   - verify_production
   - backup_test
   - verify_transport
@@ -33,7 +33,7 @@ variables:
 validate_repository:
   stage: validate
   image: python:3.12-slim
-  rules:
+  rules: &main_auto_rules
     - if: '$CI_COMMIT_BRANCH == "main"'
       when: on_success
     - when: never
@@ -58,10 +58,7 @@ postgresql_integration:
     PGPASSWORD: "ci_ephemeral_only"
     PGDATABASE: "sync_integration"
     WORKOUTS_EPHEMERAL_PG: "1"
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
-      when: on_success
-    - when: never
+  rules: *main_auto_rules
   before_script:
     - apk add --no-cache python3
     - until pg_isready -h "$PGHOST" -U "$PGUSER"; do sleep 1; done
@@ -69,16 +66,13 @@ postgresql_integration:
     - python3 -m unittest discover -s tests -p 'postgres_integration.py' -v
 
 # Provision the existing PostgreSQL 17 test host before any data flows.
-# Manual web pipeline is the single human approval; all jobs run automatically.
+# Preflight has already validated CI inputs before this job changes the test host.
 ansible_bootstrap:
   stage: bootstrap
   image: python:3.12-slim
   resource_group: workouts-production-to-test-ssh
-  rules: &main_auto_rules
-    - if: '$CI_COMMIT_BRANCH == "main"'
-      when: on_success
-    - when: never
-  before_script:
+  rules: *main_auto_rules
+  before_script: &ansible_ssh_setup
     - apt-get update -qq && apt-get install -y -qq --no-install-recommends openssh-client >/dev/null
     - pip install --no-cache-dir 'ansible-core==2.19.4'
   script:
@@ -100,7 +94,7 @@ verify_production_backup:
   image: postgres:17-alpine
   resource_group: workouts-production-backup
   rules: *main_auto_rules
-  before_script:
+  before_script: &ssh_setup
     - apk add --no-cache openssh-client python3
   script:
     - python3 scripts/db_sync.py verify-production
@@ -124,8 +118,7 @@ verify_test_restore_ssh:
   image: postgres:17-alpine
   resource_group: workouts-production-to-test-ssh
   rules: *main_auto_rules
-  before_script:
-    - apk add --no-cache openssh-client python3
+  before_script: *ssh_setup
   script:
     - python3 scripts/db_sync.py verify-transport
 
@@ -136,8 +129,7 @@ prepare_candidate:
   image: alpine:3.20
   resource_group: workouts-production-to-test-ssh
   rules: *main_auto_rules
-  before_script:
-    - apk add --no-cache openssh-client python3
+  before_script: *ssh_setup
   script:
     - python3 scripts/db_sync.py prepare-candidate
 
@@ -157,8 +149,7 @@ restore_production_to_candidate:
     - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "web"'
       when: on_success
     - when: never
-  before_script:
-    - apk add --no-cache openssh-client python3
+  before_script: *ssh_setup
   script:
     - python3 scripts/db_sync.py restore-candidate
 
@@ -171,8 +162,7 @@ sync_candidate_to_test:
   image: alpine:3.20
   resource_group: workouts-production-to-test-ssh
   rules: *main_auto_rules
-  before_script:
-    - apk add --no-cache openssh-client python3
+  before_script: *ssh_setup
   script:
     - python3 scripts/db_sync.py sync-test
 
@@ -182,8 +172,6 @@ verify_sync_result:
   image: python:3.12-slim
   resource_group: workouts-production-to-test-ssh
   rules: *main_auto_rules
-  before_script:
-    - apt-get update -qq && apt-get install -y -qq --no-install-recommends openssh-client >/dev/null
-    - pip install --no-cache-dir 'ansible-core==2.19.4'
+  before_script: *ansible_ssh_setup
   script:
     - python3 scripts/ansible_run.py verify

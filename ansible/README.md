@@ -1,6 +1,6 @@
 # GitLab-managed Ansible bootstrap
 
-Starting a **web/main pipeline** automatically runs `ansible_bootstrap` first,
+Starting a **web/main pipeline** runs preflight validation before `ansible_bootstrap`,
 then the existing verification, restore and test synchronization jobs in order.
 No manual steps on budsh are required once CI access is configured.
 
@@ -31,17 +31,22 @@ retains the pre-sync `workouts_test` backup in `/var/backups/workouts-db-sync`.
 
 ## Refactored Ansible execution
 
-- `ansible/preflight.yml` checks repository and fixed database targets locally, without SSH.
+- `scripts/ansible_run.py preflight` validates all 11 required GitLab CI/CD variables before `ansible/preflight.yml` checks repository policy, fixed database targets and SSH TCP reachability locally, without logging into either server.
 - `ansible/bootstrap.yml` provisions the existing PostgreSQL 17 test server via a restricted administrative CI identity.
 - `ansible/verify-result.yml` performs **read-only** post-sync checks of the candidate cleanup, preserved `dblink`, test data, Liquibase records and API status.
 - `scripts/ansible_run.py` is the credential/SSH launcher for the two remote Ansible playbooks.
 
-The four SSH transfer/restore wrappers and fixed-purpose server scripts are deliberately retained: they use SSH forced commands and narrow sudo permissions. Do not replace them with general-purpose administrative Ansible connections during actual data transfer.
+Preflight tasks have `policy` and `connectivity` tags. With a generated inventory
+and the CI environment available, `ansible-playbook -i <inventory>
+ansible/preflight.yml --tags policy` validates repository/database policy without
+opening network connections. CI runs both groups by default.
+
+The Python sync client and fixed-purpose server scripts use SSH forced commands and narrow sudo permissions. Do not replace them with general-purpose administrative Ansible connections during actual data transfer.
 
 ## Production inventory and security boundary
 
-`inventory.ini` now lists `hevsrv01` (production, `2.29.51.66`) and
-`budsh` (test, `192.168.1.37`). The production backup SSH user has a
+The launcher generates a temporary inventory from `PROD_HOST` and `TEST_HOST`.
+The production backup SSH user has a
 **forced command** and cannot execute Ansible modules or arbitrary shell.
 Ansible preflight checks production SSH reachability, but actual production
 backup still uses the existing restricted, read-only SSH stream.

@@ -6,16 +6,11 @@ sync_production_db: workouts
 sync_test_db: workouts_test
 sync_candidate_db: workouts_restore_candidate
 sync_staging_db: workouts_restore_staging
-sync_postgres_port: 5432
 sync_pg_bin: /usr/lib/postgresql/17/bin
 sync_pg_hba: /etc/postgresql/17/main/pg_hba.conf
 sync_pg_ident: /etc/postgresql/17/main/pg_ident.conf
 sync_server_base: /usr/local/libexec/workouts-db-sync
 sync_receiver_home: /home/workouts-db-restore
 sync_test_api: workouts-api
-sync_test_api_port: 8089
-sync_test_backup_dir: /var/backups/workouts-db-sync
-sync_expected_business_tables: 28
-sync_expected_inventory_groups: [workouts_production, workouts_test]
 # Optional. Set to a verified authenticated/non-authenticated health endpoint,
 # e.g. in environment WORKOUTS_TEST_HEALTH_URL, before enabling HTTP checks.

@@ -76,11 +76,31 @@
         group: root
         mode: '0755'
       loop:
+        - common.sh
         - receive-backup.sh
         - restore-dispatch.sh
         - receive-restore-candidate.sh
         - prepare-candidate.sh
         - sync-test.sh
+
+    - name: Create shared candidate and test maintenance lock
+      ansible.builtin.file:
+        path: /run/lock/workouts-db-sync-test.lock
+        state: touch
+        owner: root
+        group: root
+        mode: '0644'
+        access_time: preserve
+        modification_time: preserve
+
+    - name: Recreate maintenance lock after reboot
+      ansible.builtin.copy:
+        dest: /etc/tmpfiles.d/workouts-db-sync.conf
+        content: |
+          f /run/lock/workouts-db-sync-test.lock 0644 root root -
+        owner: root
+        group: root
+        mode: '0644'
 
     - name: Create root-owned read-only SQL directory
       ansible.builtin.file:
@@ -90,13 +110,14 @@
         group: root
         mode: '0755'
 
-    - name: Install version-controlled sequence reconciliation SQL
+    - name: Install version-controlled fixed-purpose SQL
       ansible.builtin.copy:
-        src: ../sql/reconcile-sequences.sql
-        dest: "{{ base }}/sql/reconcile-sequences.sql"
+        src: "../sql/{{ item }}"
+        dest: "{{ base }}/sql/{{ item }}"
         owner: root
         group: root
         mode: '0644'
+      loop: [reconcile-sequences.sql, reset-candidate.sql]
 
     - name: Fix receiver key to forced dispatcher, no ports or PTY
       ansible.builtin.copy:
@@ -254,7 +275,7 @@
       ansible.builtin.stat:
         path: "{{ base }}/{{ item }}"
         follow: false
-      loop: [receive-backup.sh, restore-dispatch.sh, receive-restore-candidate.sh, prepare-candidate.sh, sync-test.sh]
+      loop: [common.sh, receive-backup.sh, restore-dispatch.sh, receive-restore-candidate.sh, prepare-candidate.sh, sync-test.sh]
       register: installed
 
     - name: Require every entrypoint to be a root-owned executable regular file
