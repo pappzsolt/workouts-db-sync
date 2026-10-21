@@ -142,7 +142,8 @@ class AnsibleAssetsTests(unittest.TestCase):
     def test_all_playbooks_and_task_files_parse(self):
         for path in (ROOT / "ansible").rglob("*.yml"):
             with self.subTest(path=path):
-                self.assertIsInstance(yaml.safe_load(path.read_text()), list)
+                expected_type = dict if path.parent.name == "vars" else list
+                self.assertIsInstance(yaml.safe_load(path.read_text()), expected_type)
         play = load_yaml("ansible/bootstrap.yml")[0]
         for task in play["tasks"]:
             self.assertTrue(

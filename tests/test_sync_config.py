@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -101,6 +101,7 @@ class TestCiVariables(unittest.TestCase):
             )
             self.assertEqual(list(path.parent.iterdir()), [path])
             self.assertEqual(command[-1], "ansible/preflight.yml")
+            self.assertEqual(kwargs["cwd"], ROOT)
             return SimpleNamespace(returncode=0)
 
         with (
@@ -126,6 +127,45 @@ class TestCiVariables(unittest.TestCase):
 
 
 class TestTargets(unittest.TestCase):
+    def test_interrupted_transfer_terminates_and_reaps_both_processes(self):
+        source, target = MagicMock(), MagicMock()
+        source.poll.return_value = target.poll.return_value = None
+        target.wait.side_effect = [KeyboardInterrupt, 0]
+        with (
+            patch.object(db.subprocess, "Popen", side_effect=[source, target]),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            db.forward_stream(["source"], ["target"])
+        source.stdout.close.assert_called_once()
+        for process in (source, target):
+            process.terminate.assert_called_once()
+            self.assertTrue(process.wait.called)
+
+    def test_receiver_launch_failure_terminates_and_reaps_source(self):
+        source = MagicMock()
+        source.poll.return_value = None
+        with (
+            patch.object(
+                db.subprocess, "Popen", side_effect=[source, OSError("launch failed")]
+            ),
+            self.assertRaisesRegex(OSError, "launch failed"),
+        ):
+            db.forward_stream(["source"], ["target"])
+        source.stdout.close.assert_called_once()
+        source.terminate.assert_called_once()
+        source.wait.assert_called_once()
+
+    def test_stream_transfer_propagates_a_source_failure(self):
+        with self.assertRaisesRegex(RuntimeError, "production=9"):
+            db.forward_stream(
+                [
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdout.buffer.write(b'PGDMPfixture'); sys.exit(9)",
+                ],
+                [sys.executable, "-c", "import sys; sys.stdin.buffer.read()"],
+            )
+
     def test_stream_transfer_delivers_the_archive_bytes(self):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "received.dump"

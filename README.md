@@ -26,7 +26,12 @@ server provisioning, and the existing SQL/transactional restoration logic is
 unchanged.
 
 Shared CI input validation, credential copies and SSH options live in
-`scripts/ci.py`. The root-owned `scripts/server/common.sh` holds fixed server
+`scripts/ci.py`. Immutable SSH identity records define each username and its
+GitLab key/known-hosts variables once, shared by inventory and transfer clients.
+The Ansible launcher resolves playbooks from the project directory independently
+of the caller's working directory. Interrupted transfers terminate and reap both
+subprocesses, including when the receiver cannot be started.
+The root-owned `scripts/server/common.sh` holds fixed server
 targets and shared receiver/locking helpers. Candidate schema cleanup lives in
 `sql/reset-candidate.sql` and is reused by preparation and post-sync cleanup;
 it refuses to run outside `workouts_restore_candidate`.

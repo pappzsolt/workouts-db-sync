@@ -43,6 +43,12 @@ asset resolution. All reviewed SQL files under `sql/` are installed root-owned
 and read-only. Read-only post-sync queries use the same version-controlled assets
 through controller lookups and PostgreSQL stdin.
 
+`ansible/vars/postgresql.yml` defines the administrative PostgreSQL argument
+prefix shared by bootstrap, verification and reload. Each task still specifies
+its database and SQL explicitly; the restricted receiver connection stays
+separate. Preflight checks all four database names are distinct and validates
+both inventory endpoints through the same assertion loop.
+
 Server jobs run in `ci/sync.yml`, started under the parent pipeline's exclusive
 `refresh_test_database` trigger. Push-triggered restore approval is available in
 that child pipeline; the resource remains reserved while approval is pending.

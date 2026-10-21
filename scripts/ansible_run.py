@@ -11,6 +11,10 @@ import tempfile
 from pathlib import Path
 
 from ci import (
+    BOOTSTRAP_SSH,
+    PRODUCTION_SSH,
+    PROJECT_ROOT,
+    RESTORE_SSH,
     endpoint_hosts,
     require_value,
     secret_file,
@@ -33,7 +37,7 @@ def inventory(production: str, test: str) -> dict:
                     "hosts": {
                         "production": {
                             "ansible_host": production,
-                            "ansible_user": "workouts-db-backup",
+                            "ansible_user": PRODUCTION_SSH.user,
                         }
                     }
                 },
@@ -41,7 +45,7 @@ def inventory(production: str, test: str) -> dict:
                     "hosts": {
                         "test": {
                             "ansible_host": test,
-                            "ansible_user": "pappzs",
+                            "ansible_user": BOOTSTRAP_SSH.user,
                             "ansible_python_interpreter": "/usr/bin/python3",
                         }
                     }
@@ -53,8 +57,7 @@ def inventory(production: str, test: str) -> dict:
 
 def remote_environment(workdir: Path, mode: str) -> dict[str, str]:
     require_value("ANSIBLE_BECOME_PASSWORD")
-    key = secret_file("ANSIBLE_BOOTSTRAP_SSH_KEY", workdir, "admin.key")
-    hosts = secret_file("ANSIBLE_BOOTSTRAP_KNOWN_HOSTS", workdir, "known_hosts")
+    key, hosts = BOOTSTRAP_SSH.credentials(workdir, "admin")
     env = os.environ.copy()
     env.update(
         {
@@ -64,7 +67,7 @@ def remote_environment(workdir: Path, mode: str) -> dict[str, str]:
         }
     )
     if mode == "bootstrap":
-        key = secret_file("TEST_RESTORE_SSH_KEY", workdir, "restore.key")
+        key = secret_file(RESTORE_SSH.key_variable, workdir, "restore.key")
         pub = subprocess.run(
             ["ssh-keygen", "-y", "-f", str(key)],
             check=True,
@@ -101,6 +104,7 @@ def main() -> int:
                 ["ansible-playbook", "-i", str(inventory_path), PLAYBOOKS[mode]],
                 check=False,
                 env=env,
+                cwd=PROJECT_ROOT,
             ).returncode
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

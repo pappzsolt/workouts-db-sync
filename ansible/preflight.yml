@@ -14,6 +14,14 @@
       PROD_DB: "{{ sync_production_db }}"
       TEST_DB: "{{ sync_test_db }}"
       STAGING_DB: "{{ sync_staging_db }}"
+    endpoints:
+      - {group: workouts_production, host: "{{ prod_host }}"}
+      - {group: workouts_test, host: "{{ test_host }}"}
+    database_targets:
+      - "{{ sync_production_db }}"
+      - "{{ sync_test_db }}"
+      - "{{ sync_staging_db }}"
+      - "{{ sync_candidate_db }}"
   tasks:
     - name: Verify project, branch and independent targets
       ansible.builtin.assert:
@@ -23,8 +31,7 @@
           - prod_host | length > 0
           - test_host | length > 0
           - prod_host != test_host
-          - sync_production_db != sync_test_db
-          - sync_candidate_db not in [sync_production_db, sync_test_db, sync_staging_db]
+          - database_targets | unique | length == database_targets | length
         fail_msg: 'Project, database policy, or non-secret endpoint configuration mismatch.'
       tags: [policy]
 
@@ -41,11 +48,12 @@
     - name: Verify generated inventory matches the configured two endpoints
       ansible.builtin.assert:
         that:
-          - groups['workouts_production'] | default([]) | length == 1
-          - groups['workouts_test'] | default([]) | length == 1
-          - hostvars[groups['workouts_production'][0]].ansible_host == prod_host
-          - hostvars[groups['workouts_test'][0]].ansible_host == test_host
+          - groups[item.group] | default([]) | length == 1
+          - hostvars[groups[item.group][0]].ansible_host == item.host
         fail_msg: 'Dynamic inventory is missing or points to unexpected endpoints.'
+      loop: "{{ endpoints }}"
+      loop_control:
+        label: "{{ item.group }}"
       tags: [policy]
 
     - name: Check SSH TCP reachability without logging into production

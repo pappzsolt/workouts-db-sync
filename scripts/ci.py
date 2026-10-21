@@ -4,15 +4,38 @@ from __future__ import annotations
 
 import os
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
-CI_FILE_VARIABLES = (
-    "ANSIBLE_BOOTSTRAP_SSH_KEY",
-    "ANSIBLE_BOOTSTRAP_KNOWN_HOSTS",
-    "PROD_BACKUP_SSH_KEY",
-    "PROD_SSH_KNOWN_HOSTS",
-    "TEST_RESTORE_SSH_KEY",
-    "TEST_RESTORE_SSH_KNOWN_HOSTS",
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+@dataclass(frozen=True)
+class SSHIdentity:
+    user: str
+    key_variable: str
+    known_hosts_variable: str
+
+    def credentials(self, workdir: Path, prefix: str) -> tuple[Path, Path]:
+        return (
+            secret_file(self.key_variable, workdir, f"{prefix}.key"),
+            secret_file(self.known_hosts_variable, workdir, f"{prefix}.known_hosts"),
+        )
+
+
+BOOTSTRAP_SSH = SSHIdentity(
+    "pappzs", "ANSIBLE_BOOTSTRAP_SSH_KEY", "ANSIBLE_BOOTSTRAP_KNOWN_HOSTS"
+)
+PRODUCTION_SSH = SSHIdentity(
+    "workouts-db-backup", "PROD_BACKUP_SSH_KEY", "PROD_SSH_KNOWN_HOSTS"
+)
+RESTORE_SSH = SSHIdentity(
+    "workouts-db-restore", "TEST_RESTORE_SSH_KEY", "TEST_RESTORE_SSH_KNOWN_HOSTS"
+)
+CI_FILE_VARIABLES = tuple(
+    variable
+    for identity in (BOOTSTRAP_SSH, PRODUCTION_SSH, RESTORE_SSH)
+    for variable in (identity.key_variable, identity.known_hosts_variable)
 )
 CI_VALUE_VARIABLES = (
     "ANSIBLE_BECOME_PASSWORD",

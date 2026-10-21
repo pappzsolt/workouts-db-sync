@@ -1,0 +1,11 @@
+---
+# Administrative peer-auth connection; the restricted loader has a separate argv.
+pg_admin_argv:
+  - runuser
+  - -u
+  - postgres
+  - --
+  - "{{ pg_bin }}/psql"
+  - -X
+  - -v
+  - ON_ERROR_STOP=1

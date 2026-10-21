@@ -12,7 +12,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from ci import endpoint_hosts, require_value, secret_file, ssh_options
+from ci import PRODUCTION_SSH, RESTORE_SSH, endpoint_hosts, require_value, ssh_options
 
 OPERATIONS = (
     "verify-production",
@@ -25,22 +25,17 @@ OPERATIONS = (
 
 
 ENDPOINTS = {
-    "production": ("PROD_BACKUP_SSH_KEY", "PROD_SSH_KNOWN_HOSTS", "workouts-db-backup"),
-    "test": (
-        "TEST_RESTORE_SSH_KEY",
-        "TEST_RESTORE_SSH_KNOWN_HOSTS",
-        "workouts-db-restore",
-    ),
+    "production": PRODUCTION_SSH,
+    "test": RESTORE_SSH,
 }
 
 
 def endpoint(which: str, workdir: Path) -> list[str]:
     production, test = endpoint_hosts()
-    key_name, hosts_name, user = ENDPOINTS[which]
-    key = secret_file(key_name, workdir, f"{which}.key")
-    hosts = secret_file(hosts_name, workdir, f"{which}.known_hosts")
+    identity = ENDPOINTS[which]
+    key, hosts = identity.credentials(workdir, which)
     host = production if which == "production" else test
-    return ["ssh", "-T", *ssh_options(key, hosts), f"{user}@{host}"]
+    return ["ssh", "-T", *ssh_options(key, hosts), f"{identity.user}@{host}"]
 
 
 def check_archive(path: Path) -> None:
@@ -99,6 +94,7 @@ def forward_stream(prod: list[str], test: list[str]) -> None:
     # Both endpoints run fixed, restricted server-side programs.
     # Source stderr remains visible; no buffering of production credentials or dump.
     source = subprocess.Popen(prod, stdout=subprocess.PIPE)
+    target = None
     try:
         assert source.stdout is not None
         try:
@@ -112,9 +108,13 @@ def forward_stream(prod: list[str], test: list[str]) -> None:
                 f"SSH transfer failed (production={source_code}, test={target_code})"
             )
     finally:
-        if source.poll() is None:
-            source.terminate()
-            source.wait()
+        # Stop both ends before waiting, including launch failures or interruption.
+        processes = [process for process in (target, source) if process is not None]
+        for process in processes:
+            if process.poll() is None:
+                process.terminate()
+        for process in processes:
+            process.wait()
 
 
 def main() -> int:

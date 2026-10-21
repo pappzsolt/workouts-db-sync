@@ -5,32 +5,23 @@
   become: true
   vars_files:
     - ../config/sync.yml
+    - vars/postgresql.yml
   vars:
     pg_bin: "{{ sync_pg_bin }}"
     ansible_become_password: "{{ lookup('env','ANSIBLE_BECOME_PASSWORD') }}"
   tasks:
     - name: Read candidate cleanup state in one database round trip
       ansible.builtin.command:
-        argv:
-          - runuser
-          - -u
-          - postgres
-          - --
-          - "{{ pg_bin }}/psql"
-          - -XAt
-          - -v
-          - ON_ERROR_STOP=1
-          - -d
-          - "{{ sync_candidate_db }}"
-          - -f
-          - '-'
+        argv: >-
+          {{ pg_admin_argv + ["-At", "-d", sync_candidate_db, "-f", "-"] }}
         stdin: "{{ lookup('file', playbook_dir ~ '/../sql/candidate-state.sql') }}"
       register: candidate_state
       changed_when: false
 
     - name: Check test business and Liquibase records
       ansible.builtin.command:
-        argv: [runuser, -u, postgres, --, "{{ pg_bin }}/psql", -XAt, -v, ON_ERROR_STOP=1, -d, "{{ sync_test_db }}", -f, '-']
+        argv: >-
+          {{ pg_admin_argv + ["-At", "-d", sync_test_db, "-f", "-"] }}
         stdin: "{{ lookup('file', playbook_dir ~ '/../sql/business-counts.sql') }}"
       register: test_counts
       changed_when: false
