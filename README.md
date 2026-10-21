@@ -34,6 +34,19 @@ it refuses to run outside `workouts_restore_candidate`.
 The job images install Python 3 in addition to OpenSSH. A push on `main`
 still requires manual approval at `restore_production_to_candidate`.
 
+The pipeline groups jobs into five stages:
+
+| Stage | Jobs in execution order |
+| --- | --- |
+| `validate` | Repository checks and PostgreSQL integration in parallel, then preflight |
+| `setup` | Ansible bootstrap |
+| `backup` | Production backup verification → test backup → SSH transport verification |
+| `sync` | Candidate preparation → production restore (manual on push) → test sync |
+| `verify` | Independent post-sync verification |
+
+Same-stage `needs` dependencies preserve this order and keep test sync blocked
+until the production restore is approved and succeeds.
+
 Preflight validates the 11 configured CI/CD variables before bootstrap changes
 the test server. See [configuration](docs/CONFIGURATION.md) for the variable
 names and File types, and [Ansible setup](ansible/README.md) for prerequisites.

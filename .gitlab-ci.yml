@@ -8,18 +8,13 @@ workflow:
       when: always
     - when: never
 
-# Separate stages enforce strict order; no needs: [] bypasses the stage gate.
+# Stages group related work; same-stage needs preserve the required order.
 stages:
   - validate
-  - preflight
-  - bootstrap
-  - verify_production
-  - backup_test
-  - verify_transport
-  - prepare_candidate
-  - restore_candidate
-  - sync_test
-  - verify_result
+  - setup
+  - backup
+  - sync
+  - verify
 
 # Set PROD_HOST, TEST_HOST, TEST_DB_HOST in protected GitLab CI/CD Variables.
 # DB names are checked against config/sync.yml. Values below are public policy,
@@ -68,7 +63,7 @@ postgresql_integration:
 # Provision the existing PostgreSQL 17 test host before any data flows.
 # Preflight has already validated CI inputs before this job changes the test host.
 ansible_bootstrap:
-  stage: bootstrap
+  stage: setup
   image: python:3.12-slim
   resource_group: workouts-production-to-test-ssh
   rules: *main_auto_rules
@@ -79,7 +74,8 @@ ansible_bootstrap:
     - python3 scripts/ansible_run.py bootstrap
 
 preflight:
-  stage: preflight
+  stage: validate
+  needs: [validate_repository, postgresql_integration]
   image: python:3.12-slim
   rules: *main_auto_rules
   before_script:
@@ -90,7 +86,7 @@ preflight:
 # Streams a custom-format backup and validates its archive index.
 # It does not publish production data as a GitLab job artifact.
 verify_production_backup:
-  stage: verify_production
+  stage: backup
   image: postgres:17-alpine
   resource_group: workouts-production-backup
   rules: *main_auto_rules
@@ -102,7 +98,8 @@ verify_production_backup:
 # Read-only test database backup, verified in the job and then deleted.
 # No database dump is stored as a GitLab artifact.
 backup_test_database:
-  stage: backup_test
+  stage: backup
+  needs: [verify_production_backup]
   image: postgres:17-alpine
   resource_group: workouts-test-backup
   rules: *main_auto_rules
@@ -114,7 +111,8 @@ backup_test_database:
 # Proves the restricted test SSH receiver accepts a streamed production dump.
 # The receiver validates the archive and deletes it; no database is restored.
 verify_test_restore_ssh:
-  stage: verify_transport
+  stage: backup
+  needs: [backup_test_database]
   image: postgres:17-alpine
   resource_group: workouts-production-to-test-ssh
   rules: *main_auto_rules
@@ -125,7 +123,7 @@ verify_test_restore_ssh:
 # Before every restore, remove orphaned routines/sequences left by an older
 # candidate cleanup. Refuses to destroy a candidate containing business tables.
 prepare_candidate:
-  stage: prepare_candidate
+  stage: sync
   image: alpine:3.20
   resource_group: workouts-production-to-test-ssh
   rules: *main_auto_rules
@@ -137,7 +135,8 @@ prepare_candidate:
 # A successful test sync clears the candidate for the next pipeline.
 # No artifacts, no direct writes to workouts_test or workouts_restore_staging.
 restore_production_to_candidate:
-  stage: restore_candidate
+  stage: sync
+  needs: [prepare_candidate]
   image: postgres:17-alpine
   resource_group: workouts-production-to-test-ssh
   rules:
@@ -158,7 +157,8 @@ restore_production_to_candidate:
 # a single-transaction data copy preserving Liquibase and test-only records.
 # After a successful sync the server removes candidate data (keeps dblink).
 sync_candidate_to_test:
-  stage: sync_test
+  stage: sync
+  needs: [restore_production_to_candidate]
   image: alpine:3.20
   resource_group: workouts-production-to-test-ssh
   rules: *main_auto_rules
@@ -168,7 +168,7 @@ sync_candidate_to_test:
 
 # Independent, read-only verification that cleanup and test restart succeeded.
 verify_sync_result:
-  stage: verify_result
+  stage: verify
   image: python:3.12-slim
   resource_group: workouts-production-to-test-ssh
   rules: *main_auto_rules

@@ -14,15 +14,41 @@ with open(sys.argv[1]) as f:
     cfg=yaml.safe_load(f)
 assert cfg['workflow']['rules'][0]['when']=='always'
 assert cfg['restore_production_to_candidate']['rules'][0]['when']=='manual'
-assert cfg['sync_candidate_to_test']['stage']=='sync_test'
+assert cfg['sync_candidate_to_test']['stage']=='sync'
 assert cfg['verify_production_backup']['script']==['python3 scripts/db_sync.py verify-production']
 assert cfg['preflight']['script']==['python3 scripts/ansible_run.py preflight']
 assert cfg['ansible_bootstrap']['script']==['python3 scripts/ansible_run.py bootstrap']
 assert cfg['verify_sync_result']['script']==['python3 scripts/ansible_run.py verify']
-assert cfg['verify_sync_result']['stage']=='verify_result'
+assert cfg['verify_sync_result']['stage']=='verify'
 assert cfg['validate_repository']['stage']=='validate'
-assert cfg['stages'].index('preflight') < cfg['stages'].index('bootstrap')
 assert cfg['postgresql_integration']['stage']=='validate'
+# Check the execution graph, including same-stage needs and the approval gate.
+jobs = {name: job for name, job in cfg.items() if isinstance(job, dict) and 'stage' in job}
+stage_index = {name: index for index, name in enumerate(cfg['stages'])}
+def dependencies(name):
+    job = jobs[name]
+    if 'needs' in job:
+        assert job['needs'], f'{name} must not bypass stage gates with needs: []'
+        assert all(isinstance(item, str) for item in job['needs']), 'Safety dependencies must be mandatory'
+        return set(job['needs'])
+    return {other for other, config in jobs.items()
+            if stage_index[config['stage']] < stage_index[job['stage']]}
+def ancestors(name, visiting=frozenset()):
+    assert name not in visiting, f'Dependency cycle at {name}'
+    result = set()
+    for dependency in dependencies(name):
+        assert dependency in jobs, f'Unknown dependency: {dependency}'
+        assert stage_index[jobs[dependency]['stage']] <= stage_index[jobs[name]['stage']]
+        result.add(dependency)
+        result.update(ancestors(dependency, visiting | {name}))
+    return result
+sequence = ['preflight', 'ansible_bootstrap', 'verify_production_backup',
+            'backup_test_database', 'verify_test_restore_ssh', 'prepare_candidate',
+            'restore_production_to_candidate', 'sync_candidate_to_test', 'verify_sync_result']
+for previous, current in zip(sequence, sequence[1:]):
+    assert previous in ancestors(current), f'{current} can bypass {previous}'
+assert {'validate_repository', 'postgresql_integration'} <= ancestors('preflight')
+assert cfg['restore_production_to_candidate']['rules'][0]['allow_failure'] is False
 assert 'PROD_HOST' not in cfg.get('variables', {})
 assert 'TEST_HOST' not in cfg.get('variables', {})
 for item in ('ansible/preflight.yml', 'ansible/verify-result.yml', 'ansible/bootstrap.yml'):
