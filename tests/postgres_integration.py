@@ -42,6 +42,16 @@ class PgIntegration(unittest.TestCase):
         psql(f"CREATE DATABASE {candidate}")
         try:
             psql("CREATE TABLE public.old_data (id integer)", database=candidate)
+            with self.assertRaises(subprocess.CalledProcessError):
+                psql(
+                    file=ROOT / "sql/prepare-candidate.sql",
+                    database=candidate,
+                    transaction=True,
+                )
+            self.assertEqual(
+                psql("SELECT to_regclass('public.old_data')", database=candidate),
+                "old_data",
+            )
             psql(
                 file=ROOT / "sql/reset-candidate.sql",
                 database=candidate,
@@ -60,6 +70,14 @@ class PgIntegration(unittest.TestCase):
                     database=candidate,
                 ),
                 "0",
+            )
+            self.assertEqual(
+                psql(file=ROOT / "sql/candidate-state.sql", database=candidate), "0|0|1"
+            )
+            psql(
+                file=ROOT / "sql/prepare-candidate.sql",
+                database=candidate,
+                transaction=True,
             )
             psql(
                 file=ROOT / "sql/reset-candidate.sql",

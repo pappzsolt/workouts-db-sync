@@ -1,0 +1,133 @@
+---
+# SSH is pappzs; become root via sudo, then use runuser for local peer auth.
+# Avoid Ansible temp-file ACL issues when becoming a second unprivileged user.
+- name: Query existing PostgreSQL loader role
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - postgres
+      - --
+      - "{{ pg_bin }}/psql"
+      - -XAt
+      - -v
+      - ON_ERROR_STOP=1
+      - -d
+      - postgres
+      - -c
+      - "SELECT count(*) FROM pg_roles WHERE rolname='workouts_restore_loader'"
+  register: restore_loader_exists
+  changed_when: false
+
+- name: Create restricted loader role only when missing
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - postgres
+      - --
+      - "{{ pg_bin }}/psql"
+      - -X
+      - -v
+      - ON_ERROR_STOP=1
+      - -d
+      - postgres
+      - -c
+      - CREATE ROLE workouts_restore_loader LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION
+  when: restore_loader_exists.stdout | trim == '0'
+
+- name: Assert existing loader cannot administer other databases
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - postgres
+      - --
+      - "{{ pg_bin }}/psql"
+      - -XAt
+      - -v
+      - ON_ERROR_STOP=1
+      - -d
+      - postgres
+      - -c
+      - "SELECT NOT (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls) FROM pg_roles WHERE rolname='workouts_restore_loader'"
+  register: loader_restricted
+  changed_when: false
+  failed_when: loader_restricted.rc != 0 or loader_restricted.stdout | trim != 't'
+
+- name: Check candidate database existence
+  ansible.builtin.command:
+    argv: ["runuser", "-u", "postgres", "--", "{{ pg_bin }}/psql", "-X", "-A", "-t", "-d", "postgres", "-c", "SELECT count(*) FROM pg_database WHERE datname='{{ sync_candidate_db }}'"]
+  become_user: root
+  register: candidate_exists
+  changed_when: false
+
+- name: Create candidate owned by restricted loader on first bootstrap
+  ansible.builtin.command:
+    argv: ["runuser", "-u", "postgres", "--", "{{ pg_bin }}/createdb", "-O", "workouts_restore_loader", "{{ sync_candidate_db }}"]
+  become_user: root
+  when: candidate_exists.stdout | trim == '0'
+
+- name: Read current candidate database owner
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - postgres
+      - --
+      - "{{ pg_bin }}/psql"
+      - -XAt
+      - -v
+      - ON_ERROR_STOP=1
+      - -d
+      - postgres
+      - -c
+      - "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname='{{ sync_candidate_db }}'"
+  register: candidate_owner
+  changed_when: false
+  failed_when: candidate_owner.rc != 0 or candidate_owner.stdout | trim == ''
+
+- name: Set candidate owner only if needed
+  ansible.builtin.command:
+    argv: ["runuser", "-u", "postgres", "--", "{{ pg_bin }}/psql", "-X", "-v", "ON_ERROR_STOP=1", "-d", "postgres", "-c", "ALTER DATABASE {{ sync_candidate_db }} OWNER TO workouts_restore_loader"]
+  when: candidate_owner.stdout | trim != 'workouts_restore_loader'
+
+- name: Permit only mapped receiver to log in as restore loader (highest HBA priority)
+  ansible.builtin.blockinfile:
+    path: "{{ pg_hba }}"
+    insertbefore: BOF
+    backup: true
+    marker: '# {mark} WORKOUTS-DB-SYNC MANAGED'
+    block: |
+      local   {{ sync_candidate_db }} workouts_restore_loader peer map=workouts_restore_map
+      local   all                        workouts_restore_loader reject
+      host    all                        workouts_restore_loader 0.0.0.0/0 reject
+      host    all                        workouts_restore_loader ::/0 reject
+  notify: Reload PostgreSQL
+
+- name: Map receiver OS account to the dedicated database role
+  ansible.builtin.blockinfile:
+    path: "{{ pg_ident }}"
+    create: false
+    marker: '# {mark} WORKOUTS-DB-SYNC MANAGED'
+    block: |
+      workouts_restore_map workouts-db-restore workouts_restore_loader
+  notify: Reload PostgreSQL
+
+- name: Apply PostgreSQL access configuration before testing and bootstrap
+  ansible.builtin.meta: flush_handlers
+
+- name: Ensure dblink is installed in candidate by PostgreSQL administrator
+  ansible.builtin.command:
+    argv: ["runuser", "-u", "postgres", "--", "{{ pg_bin }}/psql", "-X", "-v", "ON_ERROR_STOP=1", "-d", "{{ sync_candidate_db }}", "-c", "CREATE EXTENSION IF NOT EXISTS dblink WITH SCHEMA public"]
+  become_user: root
+  changed_when: false
+
+- name: Validate restricted candidate connection as actual receiver OS user
+  ansible.builtin.command:
+    argv: ["runuser", "-u", "workouts-db-restore", "--", "{{ pg_bin }}/psql", "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-U", "workouts_restore_loader", "-d", "{{ sync_candidate_db }}", "-c", "SELECT current_user"]
+  become_user: root
+  register: candidate_login
+  changed_when: false
+  failed_when: candidate_login.rc != 0 or candidate_login.stdout | trim != 'workouts_restore_loader'
+

@@ -1,0 +1,109 @@
+# Server operations run only under the parent's pipeline-wide resource lock.
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "parent_pipeline" && $CI_COMMIT_BRANCH == "main"'
+      when: always
+    - when: never
+
+stages: [setup, backup, sync, verify]
+
+# Provision the existing PostgreSQL 17 test host before any data flows.
+# Preflight has already validated CI inputs before this job changes the test host.
+ansible_bootstrap:
+  stage: setup
+  image: python:3.12-slim
+  rules: &main_auto_rules
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: on_success
+    - when: never
+  before_script: &ansible_ssh_setup
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends openssh-client >/dev/null
+    - pip install --no-cache-dir 'ansible-core==2.19.4'
+  script:
+    - python3 scripts/ansible_run.py bootstrap
+
+# Streams a custom-format backup and validates its archive index.
+# It does not publish production data as a GitLab job artifact.
+verify_production_backup:
+  stage: backup
+  image: postgres:17-alpine
+  rules: *main_auto_rules
+  before_script: &ssh_setup
+    - apk add --no-cache openssh-client python3
+  script:
+    - python3 scripts/db_sync.py verify-production
+
+# Read-only test database backup, verified in the job and then deleted.
+# No database dump is stored as a GitLab artifact.
+backup_test_database:
+  stage: backup
+  needs: [verify_production_backup]
+  image: postgres:17-alpine
+  rules: *main_auto_rules
+  before_script:
+    - apk add --no-cache python3
+  script:
+    - python3 scripts/db_sync.py backup-test
+
+# Proves the restricted test SSH receiver accepts a streamed production dump.
+# The receiver validates the archive and deletes it; no database is restored.
+verify_test_restore_ssh:
+  stage: backup
+  needs: [backup_test_database]
+  image: postgres:17-alpine
+  rules: *main_auto_rules
+  before_script: *ssh_setup
+  script:
+    - python3 scripts/db_sync.py verify-transport
+
+# Before every restore, remove orphaned routines/sequences left by an older
+# candidate cleanup. Refuses to destroy a candidate containing business tables.
+prepare_candidate:
+  stage: sync
+  image: alpine:3.20
+  rules: *main_auto_rules
+  before_script: *ssh_setup
+  script:
+    - python3 scripts/db_sync.py prepare-candidate
+
+# Restricted production restore to an EMPTY workouts_restore_candidate ONLY.
+# A successful test sync clears the candidate for the next pipeline.
+# No artifacts, no direct writes to workouts_test or workouts_restore_staging.
+restore_production_to_candidate:
+  stage: sync
+  needs: [prepare_candidate]
+  image: postgres:17-alpine
+  rules:
+    # A code push must never start a production-data refresh without approval.
+    - if: '$CI_COMMIT_BRANCH == "main" && $WORKOUTS_PIPELINE_SOURCE == "push"'
+      when: manual
+      allow_failure: false
+    # An explicitly started web pipeline runs all stages in order.
+    - if: '$CI_COMMIT_BRANCH == "main" && $WORKOUTS_PIPELINE_SOURCE == "web"'
+      when: on_success
+    - when: never
+  before_script: *ssh_setup
+  script:
+    - python3 scripts/db_sync.py restore-candidate
+
+# Test data refresh from the candidate restored by the preceding stage.
+# The server takes a durable backup, pauses ONLY the test API and performs
+# a single-transaction data copy preserving Liquibase and test-only records.
+# After a successful sync the server removes candidate data (keeps dblink).
+sync_candidate_to_test:
+  stage: sync
+  needs: [restore_production_to_candidate]
+  image: alpine:3.20
+  rules: *main_auto_rules
+  before_script: *ssh_setup
+  script:
+    - python3 scripts/db_sync.py sync-test
+
+# Independent, read-only verification that cleanup and test restart succeeded.
+verify_sync_result:
+  stage: verify
+  image: python:3.12-slim
+  rules: *main_auto_rules
+  before_script: *ansible_ssh_setup
+  script:
+    - python3 scripts/ansible_run.py verify

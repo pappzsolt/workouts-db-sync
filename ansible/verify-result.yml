@@ -22,28 +22,16 @@
           - ON_ERROR_STOP=1
           - -d
           - "{{ sync_candidate_db }}"
-          - -c
-          - |
-            SELECT
-              (SELECT count(*) FROM pg_class c
-               JOIN pg_namespace n ON n.oid=c.relnamespace
-               WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','S','f')
-                 AND NOT EXISTS (
-                   SELECT 1 FROM pg_depend d
-                   WHERE d.classid='pg_class'::regclass AND d.objid=c.oid AND d.deptype='e')),
-              (SELECT count(*) FROM pg_proc p
-               JOIN pg_namespace n ON n.oid=p.pronamespace
-               WHERE n.nspname='public'
-                 AND NOT EXISTS (
-                   SELECT 1 FROM pg_depend d
-                   WHERE d.classid='pg_proc'::regclass AND d.objid=p.oid AND d.deptype='e')),
-              (SELECT count(*) FROM pg_extension WHERE extname='dblink');
+          - -f
+          - '-'
+        stdin: "{{ lookup('file', playbook_dir ~ '/../sql/candidate-state.sql') }}"
       register: candidate_state
       changed_when: false
 
     - name: Check test business and Liquibase records
       ansible.builtin.command:
-        argv: [runuser, -u, postgres, --, "{{ pg_bin }}/psql", -XAt, -v, ON_ERROR_STOP=1, -d, "{{ sync_test_db }}", -c, "SELECT (SELECT count(*) FROM public.users), (SELECT count(*) FROM public.workouts), (SELECT count(*) FROM public.exercises), (SELECT count(*) FROM public.databasechangelog)"]
+        argv: [runuser, -u, postgres, --, "{{ pg_bin }}/psql", -XAt, -v, ON_ERROR_STOP=1, -d, "{{ sync_test_db }}", -f, '-']
+        stdin: "{{ lookup('file', playbook_dir ~ '/../sql/business-counts.sql') }}"
       register: test_counts
       changed_when: false
 

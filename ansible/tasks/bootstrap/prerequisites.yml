@@ -1,0 +1,28 @@
+---
+- name: Check required PostgreSQL and sudo files
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ pg_bin }}/psql"
+    - "{{ pg_hba }}"
+    - "{{ pg_ident }}"
+    - /usr/sbin/visudo
+  register: bootstrap_prerequisites
+
+- name: Refuse bootstrap on an incomplete PostgreSQL 17 host
+  ansible.builtin.assert:
+    that:
+      - bootstrap_prerequisites.results | selectattr('stat.exists', 'equalto', false) | list | length == 0
+    fail_msg: 'PostgreSQL 17 or sudo prerequisites are missing; not installing infrastructure.'
+
+- name: Check test Workouts API Docker container exists
+  ansible.builtin.command:
+    argv: [docker, inspect, "{{ sync_test_api }}"]
+  register: workouts_container
+  changed_when: false
+
+- name: Check PostgreSQL system account exists
+  ansible.builtin.getent:
+    database: passwd
+    key: postgres
+

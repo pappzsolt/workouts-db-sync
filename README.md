@@ -34,15 +34,16 @@ it refuses to run outside `workouts_restore_candidate`.
 The job images install Python 3 in addition to OpenSSH. A push on `main`
 still requires manual approval at `restore_production_to_candidate`.
 
-The pipeline groups jobs into five stages:
+The parent pipeline validates the repository and inputs, then starts the
+`refresh_test_database` child pipeline. The five logical phases remain:
 
 | Stage | Jobs in execution order |
 | --- | --- |
-| `validate` | Repository checks and PostgreSQL integration in parallel, then preflight |
-| `setup` | Ansible bootstrap |
-| `backup` | Production backup verification → test backup → SSH transport verification |
-| `sync` | Candidate preparation → production restore (manual on push) → test sync |
-| `verify` | Independent post-sync verification |
+| `validate` (parent) | Repository checks and PostgreSQL integration in parallel, then preflight |
+| `setup` (child) | Ansible bootstrap |
+| `backup` (child) | Production backup verification → test backup → SSH transport verification |
+| `sync` (child) | Candidate preparation → production restore (manual on push) → test sync |
+| `verify` (child) | Independent post-sync verification |
 
 Same-stage `needs` dependencies preserve this order and keep test sync blocked
 until the production restore is approved and succeeds.
@@ -50,13 +51,26 @@ until the production restore is approved and succeeds.
 Preflight validates the 11 configured CI/CD variables before bootstrap changes
 the test server. See [configuration](docs/CONFIGURATION.md) for the variable
 names and File types, and [Ansible setup](ansible/README.md) for prerequisites.
-The root `.gitlab-ci.yml` is the only pipeline; the obsolete nested checkout and
-manual receiver installer have been removed.
+The root `.gitlab-ci.yml` owns validation and the exclusive trigger;
+`ci/sync.yml` contains the server jobs. Open the child pipeline from the
+`refresh_test_database` job to approve a push-triggered restore.
 
-Candidate preparation, restoration and test synchronization use one server-side
-lock. Run only one refresh pipeline at a time: job resource groups serialize
-individual jobs, but do not reserve the entire sequence for one pipeline.
+The trigger holds `workouts-refresh-pipeline` until the child finishes, including
+time spent waiting for manual restore approval. Other pipelines can validate
+concurrently but wait before starting server operations. The child deliberately
+does not request the parent's resource, avoiding a parent/child deadlock.
+`strategy: depend` retains compatibility with installations before GitLab 18.2.
+Candidate preparation, restoration and test synchronization also share a
+server-side lock against simultaneous commands.
+
+`sync-test.sh` separates schema validation, backup, export, atomic transfer,
+verification and candidate cleanup into functions. Queries live under `sql/`;
+bootstrap installs these reviewed assets root-owned and read-only. The bootstrap
+playbook imports prerequisite, receiver, PostgreSQL and installation checks from
+`ansible/tasks/bootstrap/`.
 
 Run offline validation with `bash scripts/tests/static-checks.sh` after installing
-`PyYAML==6.0.2`. The PostgreSQL integration test runs separately against the
+`PyYAML==6.0.2`. Pipeline/Ansible invariants live in `tests/test_pipeline.py`,
+and mocked server failure/recovery checks in `tests/test_server_sync.py`.
+The PostgreSQL integration test runs separately against the
 disposable PostgreSQL 17 service in CI.

@@ -1,0 +1,20 @@
+---
+- name: Inspect installed root-owned entrypoints
+  ansible.builtin.stat:
+    path: "{{ base }}/{{ item }}"
+    follow: false
+  loop: [common.sh, receive-backup.sh, restore-dispatch.sh, receive-restore-candidate.sh, prepare-candidate.sh, sync-test.sh]
+  register: installed
+
+- name: Require every entrypoint to be a root-owned executable regular file
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists | default(false)
+      - item.stat.isreg | default(false)
+      - item.stat.pw_name | default('') == 'root'
+      - item.stat.gr_name | default('') == 'root'
+      - item.stat.mode | default('') == '0755'
+    fail_msg: "Invalid or missing restricted entrypoint: {{ item.item }}"
+  loop: "{{ installed.results }}"
+  loop_control:
+    label: "{{ item.item }}"

@@ -20,9 +20,14 @@ lock_candidate() {
 }
 pg() { runuser -u postgres -- "$@"; }
 q() { pg "$PG/psql" -XAtq -v ON_ERROR_STOP=1 -d "$1" -c "$2"; }
+q_file() { pg "$PG/psql" -XAtq -v ON_ERROR_STOP=1 -d "$1" -f "$BASE/sql/$2"; }
 loader_query() {
   "$PG/psql" -XAtq -v ON_ERROR_STOP=1 -h /var/run/postgresql -p 5432 \
     -U workouts_restore_loader -d "$CANDIDATE" -c "$1"
+}
+loader_file() {
+  "$PG/psql" -XAtq -v ON_ERROR_STOP=1 -h /var/run/postgresql -p 5432 \
+    -U workouts_restore_loader -d "$CANDIDATE" -f "$BASE/sql/$1"
 }
 receive_archive() {
   local path="$1"

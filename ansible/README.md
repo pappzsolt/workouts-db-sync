@@ -36,6 +36,17 @@ retains the pre-sync `workouts_test` backup in `/var/backups/workouts-db-sync`.
 - `ansible/verify-result.yml` performs **read-only** post-sync checks of the candidate cleanup, preserved `dblink`, test data, Liquibase records and API status.
 - `scripts/ansible_run.py` is the credential/SSH launcher for the two remote Ansible playbooks.
 
+Bootstrap imports four task files from `ansible/tasks/bootstrap/`: prerequisites,
+receiver/SSH installation, PostgreSQL configuration and installation verification.
+Copy sources and SQL lookups use `playbook_dir`, so moving tasks does not change
+asset resolution. All reviewed SQL files under `sql/` are installed root-owned
+and read-only. Read-only post-sync queries use the same version-controlled assets
+through controller lookups and PostgreSQL stdin.
+
+Server jobs run in `ci/sync.yml`, started under the parent pipeline's exclusive
+`refresh_test_database` trigger. Push-triggered restore approval is available in
+that child pipeline; the resource remains reserved while approval is pending.
+
 Preflight tasks have `policy` and `connectivity` tags. With a generated inventory
 and the CI environment available, `ansible-playbook -i <inventory>
 ansible/preflight.yml --tags policy` validates repository/database policy without
