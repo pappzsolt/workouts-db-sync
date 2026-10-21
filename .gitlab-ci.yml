@@ -1,5 +1,5 @@
 # Workouts production -> test DB sync. Push or web on main creates a pipeline.
-# Push pipelines require approval before restoring production data to test.
+# Push and web pipelines run the full sync automatically after validation.
 workflow:
   rules:
     - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
@@ -65,13 +65,11 @@ preflight:
   script:
     - python3 scripts/ansible_run.py preflight
 
-# Retain the resource while the child runs, including its blocking manual gate.
+# Retain the resource until all child pipeline jobs finish.
 refresh_test_database:
   stage: sync
   resource_group: workouts-refresh-pipeline
   rules: *main_auto_rules
-  variables:
-    WORKOUTS_PIPELINE_SOURCE: $CI_PIPELINE_SOURCE
   trigger:
     include:
       - local: ci/sync.yml

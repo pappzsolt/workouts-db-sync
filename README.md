@@ -5,7 +5,7 @@ GitLab CI/CD + Ansible orchestration for production-to-test PostgreSQL 17 data s
 - **Production:** `PROD_HOST` from GitLab CI/CD variables, `workouts`, read-only forced-command SSH backup.
 - **Test:** `TEST_HOST` from GitLab CI/CD variables, `workouts_restore_candidate` → `workouts_test`.
 - **Infrastructure:** Ansible provisions test receiver, restricted loader and candidate.
-- **Safety:** Git push pipelines pause for manual approval before production data restore; web-started pipelines run automatically. Liquibase and test-specific tables are preserved. Test DB is backed up on `budsh` before sync.
+- **Safety:** Push and web pipelines on main run automatically after validation. Liquibase and test-specific tables are preserved. Test DB is backed up on `budsh` before sync.
 
 The fixed-purpose receiver and transactional sync scripts intentionally remain
 shell-based to retain the forced-command security boundary. This repository
@@ -36,8 +36,8 @@ targets and shared receiver/locking helpers. Candidate schema cleanup lives in
 `sql/reset-candidate.sql` and is reused by preparation and post-sync cleanup;
 it refuses to run outside `workouts_restore_candidate`.
 
-The job images install Python 3 in addition to OpenSSH. A push on `main`
-still requires manual approval at `restore_production_to_candidate`.
+The job images install Python 3 in addition to OpenSSH. Push and web pipelines
+on `main` run the restore and test synchronization automatically.
 
 The parent pipeline validates the repository and inputs, then starts the
 `refresh_test_database` child pipeline. The five logical phases remain:
@@ -47,21 +47,21 @@ The parent pipeline validates the repository and inputs, then starts the
 | `validate` (parent) | Repository checks and PostgreSQL integration in parallel, then preflight |
 | `setup` (child) | Ansible bootstrap |
 | `backup` (child) | Production backup verification → test backup → SSH transport verification |
-| `sync` (child) | Candidate preparation → production restore (manual on push) → test sync |
+| `sync` (child) | Candidate preparation → automatic production restore → test sync |
 | `verify` (child) | Independent post-sync verification |
 
 Same-stage `needs` dependencies preserve this order and keep test sync blocked
-until the production restore is approved and succeeds.
+until the production restore succeeds.
 
 Preflight validates the 11 configured CI/CD variables before bootstrap changes
 the test server. See [configuration](docs/CONFIGURATION.md) for the variable
 names and File types, and [Ansible setup](ansible/README.md) for prerequisites.
 The root `.gitlab-ci.yml` owns validation and the exclusive trigger;
 `ci/sync.yml` contains the server jobs. Open the child pipeline from the
-`refresh_test_database` job to approve a push-triggered restore.
+`refresh_test_database` job to follow progress. No manual job start is required.
 
-The trigger holds `workouts-refresh-pipeline` until the child finishes, including
-time spent waiting for manual restore approval. Other pipelines can validate
+The trigger holds `workouts-refresh-pipeline` until the child finishes.
+Other pipelines can validate
 concurrently but wait before starting server operations. The child deliberately
 does not request the parent's resource, avoiding a parent/child deadlock.
 `strategy: depend` retains compatibility with installations before GitLab 18.2.

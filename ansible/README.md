@@ -50,8 +50,8 @@ separate. Preflight checks all four database names are distinct and validates
 both inventory endpoints through the same assertion loop.
 
 Server jobs run in `ci/sync.yml`, started under the parent pipeline's exclusive
-`refresh_test_database` trigger. Push-triggered restore approval is available in
-that child pipeline; the resource remains reserved while approval is pending.
+`refresh_test_database` trigger. Both push and web pipelines run all server jobs
+automatically in order; the resource remains reserved until the child finishes.
 
 Preflight tasks have `policy` and `connectivity` tags. With a generated inventory
 and the CI environment available, `ansible-playbook -i <inventory>

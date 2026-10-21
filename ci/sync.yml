@@ -73,15 +73,7 @@ restore_production_to_candidate:
   stage: sync
   needs: [prepare_candidate]
   image: postgres:17-alpine
-  rules:
-    # A code push must never start a production-data refresh without approval.
-    - if: '$CI_COMMIT_BRANCH == "main" && $WORKOUTS_PIPELINE_SOURCE == "push"'
-      when: manual
-      allow_failure: false
-    # An explicitly started web pipeline runs all stages in order.
-    - if: '$CI_COMMIT_BRANCH == "main" && $WORKOUTS_PIPELINE_SOURCE == "web"'
-      when: on_success
-    - when: never
+  rules: *main_auto_rules
   before_script: *ssh_setup
   script:
     - python3 scripts/db_sync.py restore-candidate

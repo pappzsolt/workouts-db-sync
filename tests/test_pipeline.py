@@ -1,4 +1,4 @@
-"""Offline checks for pipeline ordering, approval and exclusive server access."""
+"""Offline checks for automatic pipeline ordering and exclusive server access."""
 
 import unittest
 from itertools import pairwise
@@ -53,9 +53,6 @@ class PipelineTests(unittest.TestCase):
         self.assertIn(refresh["trigger"]["strategy"], ("depend", "mirror"))
         self.assertEqual(refresh["trigger"]["include"], [{"local": "ci/sync.yml"}])
         self.assertTrue(refresh["trigger"]["forward"]["pipeline_variables"])
-        self.assertEqual(
-            refresh["variables"]["WORKOUTS_PIPELINE_SOURCE"], "$CI_PIPELINE_SOURCE"
-        )
         self.assertIn("preflight", ancestors(self.parent, "refresh_test_database"))
         for name, job in self.parent.items():
             if (
@@ -91,14 +88,28 @@ class PipelineTests(unittest.TestCase):
             with self.subTest(job=current):
                 self.assertIn(previous, ancestors(self.child, current))
 
-    def test_push_requires_approval_and_web_runs_automatically(self):
-        push, web, fallback = self.child["restore_production_to_candidate"]["rules"]
-        self.assertIn('$WORKOUTS_PIPELINE_SOURCE == "push"', push["if"])
-        self.assertEqual(push["when"], "manual")
-        self.assertIs(push["allow_failure"], False)
-        self.assertIn('$WORKOUTS_PIPELINE_SOURCE == "web"', web["if"])
-        self.assertEqual(web["when"], "on_success")
+    def test_push_and_web_sync_without_manual_jobs(self):
+        push, web, fallback = self.parent["workflow"]["rules"]
+        self.assertIn('$CI_PIPELINE_SOURCE == "push"', push["if"])
+        self.assertIn('$CI_PIPELINE_SOURCE == "web"', web["if"])
+        self.assertEqual(push["when"], "always")
+        self.assertEqual(web["when"], "always")
         self.assertEqual(fallback["when"], "never")
+        restore, fallback = self.child["restore_production_to_candidate"]["rules"]
+        self.assertEqual(restore["if"], '$CI_COMMIT_BRANCH == "main"')
+        self.assertEqual(restore["when"], "on_success")
+        self.assertEqual(fallback["when"], "never")
+        for config in (self.parent, self.child):
+            for name, job in config.items():
+                if isinstance(job, dict) and "stage" in job:
+                    with self.subTest(job=name):
+                        self.assertNotEqual(job.get("when"), "manual")
+                        self.assertTrue(
+                            all(
+                                rule.get("when") != "manual"
+                                for rule in job.get("rules", [])
+                            )
+                        )
 
     def test_client_commands_still_use_restricted_entrypoints(self):
         commands = {

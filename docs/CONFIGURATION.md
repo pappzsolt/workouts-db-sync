@@ -13,5 +13,4 @@
 - `sql/reset-candidate.sql` is installed with the same ownership and permissions; preparation and successful sync invoke it within a transaction.
 - `scripts/ci.py` is the shared CI input/SSH layer. `scripts/server/common.sh` is installed root-owned alongside the fixed-purpose server entrypoints; it does not read endpoint or database overrides from the SSH environment.
 - `.gitlab-ci.yml` validates inputs and reserves `workouts-refresh-pipeline` while the `ci/sync.yml` child runs. The parent forwards database defaults and pipeline overrides; protected project CI/CD variables remain available to child jobs on the same protected branch.
-- `WORKOUTS_PIPELINE_SOURCE` carries the original `push`/`web` source into the child, where `CI_PIPELINE_SOURCE` is `parent_pipeline`. Restore approval rules use the original source.
 - Candidate-state, table-structure, Liquibase fingerprint and authentication cleanup queries live under `sql/`. `prepare-candidate.sql` includes the common reset script only after rejecting existing business tables and unexpected schemas.
