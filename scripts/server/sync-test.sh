@@ -23,11 +23,16 @@ cleanup() {
 }
 
 validate_schema() {
-  local table_names name source_columns test_columns
+  local table_names expected_tables name source_columns test_columns
   # Fail closed on unexpected schema drift; never guess which new tables to copy.
   table_names="$(q_file "$SRC" business-tables.sql)"
-  mapfile -t TABLES <<< "$table_names"
-  [[ "${#TABLES[@]}" == 28 ]] || { echo "ERROR: Expected 28 source tables; found ${#TABLES[@]}" >&2; exit 1; }
+  expected_tables="$(q_file "$SRC" expected-business-tables.sql)"
+  if [[ -z "$expected_tables" || "$table_names" != "$expected_tables" ]]; then
+    printf 'ERROR: Source tables differ from the reviewed transfer set.\nExpected:\n%s\nActual:\n%s\n' "$expected_tables" "$table_names" >&2
+    exit 1
+  fi
+  TABLES=()
+  while IFS= read -r name; do TABLES+=("$name"); done <<< "$table_names"
   for name in "${TABLES[@]}"; do
     [[ "$name" =~ ^[a-z][a-z0-9_]*$ ]] || { echo 'ERROR: Unsafe table identifier' >&2; exit 1; }
     [[ "$(q "$DST" "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname='public' AND tablename='$name'")" == 1 ]] || { echo "ERROR: Missing test table: $name" >&2; exit 1; }
@@ -65,7 +70,7 @@ export_candidate() {
   # The users/coaches INSERT triggers rebuild account_login_identifiers.
   # Keep the table in the TRUNCATE set, but never insert its source rows again:
   # doing so violates account_login_identifiers_pkey.
-  # The other 27 business tables are copied from the candidate.
+  # All other reviewed business tables are copied from the candidate.
   for name in "${TABLES[@]}"; do
     if [[ "$name" == 'account_login_identifiers' ]]; then
       continue

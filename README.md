@@ -79,3 +79,9 @@ Run offline validation with `bash scripts/tests/static-checks.sh` after installi
 and mocked server failure/recovery checks in `tests/test_server_sync.py`.
 The PostgreSQL integration test runs separately against the
 disposable PostgreSQL 17 service in CI.
+
+The transfer set is explicitly reviewed in `sql/expected-business-tables.sql`.
+Schema validation compares exact table names (including registration and bug-report
+tables), then target table presence and column definitions before stopping the API.
+When migrations add or remove business tables, review and update this manifest;
+unknown tables stop synchronization rather than being silently included.
