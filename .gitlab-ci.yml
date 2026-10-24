@@ -28,7 +28,7 @@ validate_repository:
       when: on_success
     - when: never
   before_script:
-    - pip install --no-cache-dir 'PyYAML==6.0.2'
+    - python3 -m pip install --no-cache-dir -r requirements-test.txt
   script:
     - bash scripts/tests/static-checks.sh
 

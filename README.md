@@ -74,8 +74,8 @@ bootstrap installs these reviewed assets root-owned and read-only. The bootstrap
 playbook imports prerequisite, receiver, PostgreSQL and installation checks from
 `ansible/tasks/bootstrap/`.
 
-Run offline validation with `bash scripts/tests/static-checks.sh` after installing
-`PyYAML==6.0.2`. Pipeline/Ansible invariants live in `tests/test_pipeline.py`,
+Install validation dependencies with `python3 -m pip install -r requirements-test.txt`,
+then run `bash scripts/tests/static-checks.sh`. CI uses the same requirements file. Pipeline/Ansible invariants live in `tests/test_pipeline.py`,
 and mocked server failure/recovery checks in `tests/test_server_sync.py`.
 The PostgreSQL integration test runs separately against the
 disposable PostgreSQL 17 service in CI.
