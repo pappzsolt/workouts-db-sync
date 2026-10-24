@@ -28,9 +28,12 @@
 
     - name: Check test API Docker state
       ansible.builtin.command:
-        argv: [docker, inspect, -f, "{{ '{{.State.Running}}' }}", "{{ sync_test_api }}"]
+        argv: [docker, inspect, -f, "{{ '{{.State.Running}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' }}", "{{ sync_test_api }}"]
       register: api_running
       changed_when: false
+      until: api_running.rc == 0 and api_running.stdout | trim == 'true|healthy'
+      retries: "{{ sync_health_retries }}"
+      delay: "{{ sync_health_delay }}"
 
     - name: Check optional configured HTTP health endpoint
       ansible.builtin.uri:
@@ -46,7 +49,9 @@
       ansible.builtin.assert:
         that:
           - candidate_state.stdout | trim == '0|0|1'
-          - test_counts.stdout.split('|') | map('int') | min > 0
-          - api_running.stdout | trim == 'true'
+          - test_counts.stdout.split('|') | length == 4
+          - test_counts.stdout.split('|')[:3] | map('int') | min >= 0
+          - test_counts.stdout.split('|')[3] | int > 0
+          - api_running.stdout | trim == 'true|healthy'
         fail_msg: 'Candidate cleanup, test data, Liquibase or Docker API validation failed.'
-        success_msg: 'Candidate clean, dblink kept, test populated, Liquibase present, API running.'
+        success_msg: 'Candidate clean, dblink kept, business counts valid, Liquibase present, API healthy.'

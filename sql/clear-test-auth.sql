@@ -1,8 +1,8 @@
-TRUNCATE TABLE public.auth_login_attempts,
-               public.login_audit_logs,
-               public.password_reset_tokens,
-               public.password_reset_email_outbox,
-               public.refresh_token_revocations,
-               public.refresh_token_families,
-               public.account_token_versions
-RESTART IDENTITY;
+\ir cleared-tables.sql
+DO $clear$
+DECLARE names text;
+BEGIN
+  SELECT string_agg(format('public.%I', tablename), ', ') INTO names FROM sync_cleared_tables;
+  EXECUTE 'TRUNCATE TABLE ' || names || ' RESTART IDENTITY';
+END;
+$clear$;

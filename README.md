@@ -31,8 +31,8 @@ GitLab key/known-hosts variables once, shared by inventory and transfer clients.
 The Ansible launcher resolves playbooks from the project directory independently
 of the caller's working directory. Interrupted transfers terminate and reap both
 subprocesses, including when the receiver cannot be started.
-The root-owned `scripts/server/common.sh` holds fixed server
-targets and shared receiver/locking helpers. Candidate schema cleanup lives in
+The root-owned `scripts/server/common.sh` loads generated `server-config.sh`
+from the shared policy and provides receiver/locking helpers. Candidate schema cleanup lives in
 `sql/reset-candidate.sql` and is reused by preparation and post-sync cleanup;
 it refuses to run outside `workouts_restore_candidate`.
 
@@ -85,3 +85,9 @@ Schema validation compares exact table names (including registration and bug-rep
 tables), then target table presence and column definitions before stopping the API.
 When migrations add or remove business tables, review and update this manifest;
 unknown tables stop synchronization rather than being silently included.
+
+The shared policy now also drives the backup role, local PostgreSQL port, receiver
+size limit and server paths. Sync verifies every copied table's content, clears
+registration/password-reset outgoing mail and sessions, and waits for Docker API
+health. See [configuration and recovery](docs/CONFIGURATION.md) for backup-role
+maintenance and the root-only, snapshot-first candidate reset command.

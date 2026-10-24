@@ -1,8 +1,8 @@
 ---
 - name: Create dedicated OS SSH receiver (without shell access over authorized key)
   ansible.builtin.user:
-    name: workouts-db-restore
-    home: /home/workouts-db-restore
+    name: "{{ sync_receiver_user }}"
+    home: "{{ restore_home }}"
     shell: /bin/bash
     create_home: true
     system: false
@@ -10,8 +10,8 @@
 - name: Lock down receiver home
   ansible.builtin.file:
     path: "{{ restore_home }}"
-    owner: workouts-db-restore
-    group: workouts-db-restore
+    owner: "{{ sync_receiver_user }}"
+    group: "{{ sync_receiver_user }}"
     mode: '0750'
 
 - name: Create restricted receiver directories
@@ -22,9 +22,9 @@
     group: "{{ item.group }}"
     mode: "{{ item.mode }}"
   loop:
-    - {path: /usr/local/libexec/workouts-db-sync, owner: root, group: root, mode: '0755'}
-    - {path: /home/workouts-db-restore/.ssh, owner: workouts-db-restore, group: workouts-db-restore, mode: '0700'}
-    - {path: /home/workouts-db-restore/incoming, owner: workouts-db-restore, group: workouts-db-restore, mode: '0700'}
+    - {path: "{{ base }}", owner: root, group: root, mode: '0755'}
+    - {path: "{{ restore_home }}/.ssh", owner: "{{ sync_receiver_user }}", group: "{{ sync_receiver_user }}", mode: '0700'}
+    - {path: "{{ restore_home }}/incoming", owner: "{{ sync_receiver_user }}", group: "{{ sync_receiver_user }}", mode: '0700'}
 
 - name: Copy only audited root-owned fixed-purpose entrypoints
   ansible.builtin.copy:
@@ -34,6 +34,7 @@
     group: root
     mode: '0755'
   loop:
+    - reset-candidate.sh
     - common.sh
     - receive-backup.sh
     - restore-dispatch.sh
@@ -43,7 +44,7 @@
 
 - name: Create shared candidate and test maintenance lock
   ansible.builtin.file:
-    path: /run/lock/workouts-db-sync-test.lock
+    path: "{{ sync_lock }}"
     state: touch
     owner: root
     group: root
@@ -55,7 +56,7 @@
   ansible.builtin.copy:
     dest: /etc/tmpfiles.d/workouts-db-sync.conf
     content: |
-      f /run/lock/workouts-db-sync-test.lock 0644 root root -
+      f {{ sync_lock }} 0644 root root -
     owner: root
     group: root
     mode: '0644'
@@ -84,8 +85,8 @@
     dest: "{{ restore_home }}/.ssh/authorized_keys"
     content: |
       restrict,command="{{ base }}/restore-dispatch.sh" {{ restore_pubkey }}
-    owner: workouts-db-restore
-    group: workouts-db-restore
+    owner: "{{ sync_receiver_user }}"
+    group: "{{ sync_receiver_user }}"
     mode: '0600'
   no_log: true
 
@@ -93,9 +94,18 @@
   ansible.builtin.copy:
     dest: /etc/sudoers.d/workouts-db-sync-test
     content: |
-      workouts-db-restore ALL=(root) NOPASSWD: {{ base }}/sync-test.sh, {{ base }}/prepare-candidate.sh
+      {{ sync_receiver_user }} ALL=(root) NOPASSWD: {{ base }}/sync-test.sh, {{ base }}/prepare-candidate.sh
     owner: root
     group: root
     mode: '0440'
     validate: '/usr/sbin/visudo -cf %s'
 
+
+- name: Install immutable runtime policy from the shared configuration
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/templates/server-config.sh.j2"
+    dest: "{{ base }}/server-config.sh"
+    owner: root
+    group: root
+    mode: '0644'
+    validate: '/bin/bash -n %s'

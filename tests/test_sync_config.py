@@ -2,7 +2,11 @@
 
 import importlib.util
 import os
+import json
+import re
+import shlex
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -234,3 +238,67 @@ class TestTargets(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PolicyTests(unittest.TestCase):
+    def test_policy_changes_are_consumed_by_the_backup_client(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env = {"TEST_DB_PASSWORD":"fixture", "TEST_DB_HOST":"test.example", "TEST_DB":"custom_test"}
+            policy = dict(db.POLICY, sync_test_db="custom_test", sync_backup_role="custom_reader", sync_pg_port=6543)
+            with patch.dict(os.environ, env, clear=True), patch.object(db, "POLICY", policy), patch.object(db, "check_archive"), patch.object(db.subprocess, "run") as run:
+                (Path(directory)/'test.dump').write_bytes(b'PGDMPfixture')
+                db.backup_test(Path(directory))
+            connection = run.call_args.kwargs['env']
+            self.assertEqual((connection['PGDATABASE'],connection['PGUSER'],connection['PGPORT']),('custom_test','custom_reader','6543'))
+
+    def test_backup_rejects_database_or_port_override_before_connecting(self):
+        env = {"TEST_DB_PASSWORD":"fixture", "TEST_DB_HOST":"test.example", "TEST_DB":db.POLICY['sync_test_db']}
+        for override in ({'TEST_DB':'wrong'}, {'TEST_DB_PORT':'9999'}):
+            with self.subTest(override=override), tempfile.TemporaryDirectory() as directory:
+                with patch.dict(os.environ, dict(env, **override), clear=True), patch.object(db.subprocess,'run') as run, self.assertRaises(ValueError):
+                    db.backup_test(Path(directory))
+                run.assert_not_called()
+
+    def test_invalid_policy_rejects_unsafe_targets_and_limits(self):
+        from policy import POLICY, load_policy
+        for override in ({'sync_candidate_db':POLICY['sync_test_db']}, {'sync_backup_role':'reader; DROP DATABASE x'}, {'sync_max_dump_bytes':0}, {'sync_pg_port':True}):
+            with self.subTest(override=override), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory)/'policy.json'
+                path.write_text(json.dumps(dict(POLICY, **override)))
+                with self.assertRaises(ValueError):
+                    load_policy(path)
+
+    def test_rendered_runtime_policy_uses_configuration_and_cannot_be_overridden_by_environment(self):
+        # Use the same template file/filter semantics as Ansible, then execute Bash.
+        import jinja2
+        from policy import POLICY
+        policy = dict(POLICY, sync_test_db='custom_test',sync_candidate_db='custom_candidate',sync_pg_port=6543,sync_max_dump_bytes=512)
+        env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+        env.filters['quote'] = shlex.quote
+        rendered = env.from_string((ROOT/'ansible/templates/server-config.sh.j2').read_text()).render(policy)
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory)/'server-config.sh'
+            config.write_text(rendered)
+            common = Path(directory)/'common.sh'
+            common.write_text((ROOT/'scripts/server/common.sh').read_text())
+            result = subprocess.run(['bash','-c','source "$1"; printf "%s|%s|%s|%s" "$TEST_DB" "$CANDIDATE" "$PG_PORT" "$MAX_DUMP_BYTES"','test',str(common)],env=dict(os.environ,TEST_DB='wrong',PG_PORT='9999'),capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(result.stdout,'custom_test|custom_candidate|6543|512')
+
+    def test_receiver_uses_configured_limit_including_boundary_and_invalid_header(self):
+        import jinja2
+        from policy import POLICY
+        environment=jinja2.Environment(undefined=jinja2.StrictUndefined)
+        environment.filters['quote']=shlex.quote
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            policy=dict(POLICY,sync_max_dump_bytes=8,sync_pg_bin=str(root))
+            (root/'server-config.sh').write_text(environment.from_string((ROOT/'ansible/templates/server-config.sh.j2').read_text()).render(policy))
+            (root/'common.sh').write_text((ROOT/'scripts/server/common.sh').read_text())
+            restore=root/'pg_restore'; restore.write_text('#!/bin/sh\nexit 0\n'); restore.chmod(0o755)
+            # Portable stat fixture: only adapt Linux stat syntax for macOS execution.
+            command='source "$1"; stat() { wc -c < "$3"; }; receive_archive "$2"'
+            for data,expected in [(b'PGDMP123',0),(b'PGDMP1234',1),(b'WRONG123',1),(b'',1)]:
+                with self.subTest(data=data):
+                    result=subprocess.run(['bash','-c',command,'receiver',str(root/'common.sh'),str(root/'received.dump')],input=data,capture_output=True)
+                    self.assertEqual(result.returncode,expected,result.stderr)

@@ -157,9 +157,8 @@ class AnsibleAssetsTests(unittest.TestCase):
                 self.assertIsInstance(yaml.safe_load(path.read_text()), expected_type)
         play = load_yaml("ansible/bootstrap.yml")[0]
         for task in play["tasks"]:
-            self.assertTrue(
-                (ROOT / "ansible" / task["ansible.builtin.import_tasks"]).is_file()
-            )
+            if "ansible.builtin.import_tasks" in task:
+                self.assertTrue((ROOT / "ansible" / task["ansible.builtin.import_tasks"]).is_file())
 
     def test_installed_scripts_remain_root_owned_and_executable(self):
         tasks = load_yaml("ansible/tasks/bootstrap/receiver.yml")
@@ -180,3 +179,33 @@ class AnsibleAssetsTests(unittest.TestCase):
             ):
                 for name in task["loop"]:
                     self.assertTrue((ROOT / "scripts/server" / name).is_file())
+
+
+class VerificationPolicyTests(unittest.TestCase):
+    def evaluate(self, expression, **values):
+        import jinja2
+        environment = jinja2.Environment()
+        environment.filters['split'] = lambda value, sep: value.split(sep)
+        return environment.compile_expression(expression)(**values)
+
+    def test_empty_business_tables_are_valid_but_missing_migrations_are_not(self):
+        verify = load_yaml('ansible/verify-result.yml')[0]
+        expressions = next(t['ansible.builtin.assert']['that'] for t in verify['tasks'] if 'ansible.builtin.assert' in t)
+        for counts, expected in [('0|0|0|42',True),('1|2|3|42',True),('0|0|0|0',False),('0|0|42',False)]:
+            with self.subTest(counts=counts):
+                valid = all(self.evaluate(e,candidate_state={'stdout':'0|0|1'},test_counts={'stdout':counts},api_running={'stdout':'true|healthy'}) for e in expressions)
+                self.assertEqual(valid,expected)
+
+    def test_running_but_unhealthy_api_is_not_accepted(self):
+        verify = load_yaml('ansible/verify-result.yml')[0]
+        health = next(t for t in verify['tasks'] if t.get('register')=='api_running')
+        for status, expected in [('true|healthy',True),('false|healthy',False),('true|starting',False),('true|unhealthy',False),('true|missing',False),('true',False)]:
+            with self.subTest(status=status):
+                self.assertEqual(self.evaluate(health['until'],api_running={'rc':0,'stdout':status}),expected)
+        self.assertIn('sync_health_retries',health['retries'])
+
+    def test_recovery_is_not_available_to_the_restricted_ssh_identity(self):
+        dispatcher = (ROOT/'scripts/server/restore-dispatch.sh').read_text()
+        sudoers = next(t['ansible.builtin.copy']['content'] for t in load_yaml('ansible/tasks/bootstrap/receiver.yml') if t.get('name')=='Limit passwordless sudo to two immutable server-side programs')
+        self.assertNotIn('reset-candidate',dispatcher)
+        self.assertNotIn('reset-candidate',sudoers)

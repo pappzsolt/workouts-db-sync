@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 
 from ci import PRODUCTION_SSH, RESTORE_SSH, endpoint_hosts, require_value, ssh_options
+from policy import POLICY
 
 OPERATIONS = (
     "verify-production",
@@ -62,14 +63,18 @@ def verify_production(prod: list[str], workdir: Path) -> None:
 
 
 def backup_test(workdir: Path) -> None:
+    if require_value("TEST_DB").strip() != POLICY["sync_test_db"]:
+        raise ValueError("TEST_DB does not match repository policy")
+    if os.environ.get("TEST_DB_PORT", str(POLICY["sync_pg_port"])) != str(POLICY["sync_pg_port"]):
+        raise ValueError("TEST_DB_PORT does not match repository policy")
     password = require_value("TEST_DB_PASSWORD")
     path = workdir / "test.dump"
     env = os.environ.copy()
     env.update(
         PGHOST=require_value("TEST_DB_HOST").strip(),
-        PGPORT=os.environ.get("TEST_DB_PORT", "5432"),
-        PGUSER="workouts_db_sync",
-        PGDATABASE=require_value("TEST_DB").strip(),
+        PGPORT=str(POLICY["sync_pg_port"]),
+        PGUSER=POLICY["sync_backup_role"],
+        PGDATABASE=POLICY["sync_test_db"],
         PGPASSWORD=password,
         PGCONNECT_TIMEOUT="10",
     )

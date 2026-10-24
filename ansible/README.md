@@ -23,8 +23,9 @@ production server. **A completely bare OS cannot be provisioned by this repo**:
 PostgreSQL 17, Docker, workouts-api, an SSH-accessible sudo-capable administrative
 account, and the production read-only SSH backup endpoint must already exist.
 The GitLab runner must reach budsh via TCP/22, and CI variables must be supplied
-in GitLab before the first pipeline. PostgreSQL database changes are confined
-to `workouts_restore_candidate` during bootstrap.
+in GitLab before the first pipeline. Bootstrap prepares `workouts_restore_candidate` and maintains read-only backup
+grants on `workouts_test`, including defaults for current table-owner roles.
+It does not modify production.
 
 No database dumps are stored as GitLab artifacts. Server-side `sync-test.sh`
 retains the pre-sync `workouts_test` backup in `/var/backups/workouts-db-sync`.
@@ -72,3 +73,7 @@ This is **not** bare-metal provisioning of production. To build a new
 production host from zero, provision its PostgreSQL/Docker stack and establish
 a separately authorized infrastructure admin SSH identity first. Do not reuse
 the backup identity or grant it unrestricted SSH/sudo.
+
+Runtime configuration is rendered root-owned from `config/sync.yml`. See
+[configuration and recovery](../docs/CONFIGURATION.md) for the shared dump-size
+limit, mandatory Docker health check, and snapshot-first candidate recovery tool.

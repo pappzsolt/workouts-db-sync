@@ -22,6 +22,10 @@ BASE="$REPO_ROOT"
 PG=/fixture/postgresql
 CANDIDATE=workouts_restore_candidate
 TEST_DB=workouts_test
+PG_PORT=5432
+PG_SOCKET=/fixture/socket
+PG_ADMIN_USER=postgres
+API=workouts-api
 fail() { echo "$*" >&2; exit 1; }
 chown() { :; }
 docker() {
@@ -44,13 +48,16 @@ q_file() {
     expected-business-tables.sql) printf '%s\n' "$EXPECTED_TABLES" ;;
     table-columns.sql)
       if [[ "$FAILURE" == columns && "$1" == workouts_test ]]; then echo different; else echo same; fi ;;
+    table-fingerprints.sql)
+      if [[ "$FAILURE" == content && "$1" == workouts_test ]]; then echo altered; else echo same; fi ;;
+    assert-cleared.sql) [[ "$FAILURE" != uncleared ]] ;;
     *) echo unchanged ;;
   esac
 }
 """)
             source = (ROOT / "scripts/server/sync-test.sh").read_text()
             source = source.replace(
-                "source /usr/local/libexec/workouts-db-sync/common.sh",
+                'source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/common.sh"',
                 'source "$FIXTURE_COMMON"',
             )
             script = workdir / "sync-test.sh"
@@ -138,7 +145,7 @@ trap cleanup EXIT
 
     def test_query_failure_prevents_candidate_cleanup(self):
         result, trace, _ = self.run_sync_step(
-            "verify_transfer\nclear_candidate", "query"
+            "verify_transfer\nclear_candidate", "fingerprint"
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("reset-candidate.sql", trace)
@@ -151,3 +158,59 @@ trap cleanup EXIT
         self.assertIn("reset-candidate.sql", trace)
         self.assertIn("docker start workouts-api", trace)
         self.assertFalse(dump_exists)
+
+    def test_same_row_count_but_changed_content_preserves_candidate(self):
+        result, trace, _ = self.run_sync_step("verify_transfer\nclear_candidate", "content")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("contents differ", result.stderr)
+        self.assertNotIn("reset-candidate.sql", trace)
+
+    def test_uncleared_mail_or_session_rows_preserve_candidate(self):
+        result, trace, _ = self.run_sync_step("verify_transfer\nclear_candidate", "uncleared")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("reset-candidate.sql", trace)
+
+
+class RecoveryTests(unittest.TestCase):
+    def run_recovery(self, failure='', argument='--discard-candidate'):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/'common.sh').write_text('''set -Eeuo pipefail
+BASE="$FIXTURE_ROOT"
+PG=/fixture
+PG_PORT=5432
+PG_SOCKET=/fixture/socket
+PG_ADMIN_USER=postgres
+CANDIDATE=custom_candidate
+BACKUP_DIR="$FIXTURE_ROOT"
+fail() { echo "$*" >&2; exit 1; }
+require_root() { :; }
+lock_candidate() { echo locked >> "$TRACE"; }
+install() { :; }
+chown() { :; }
+pg() { echo "$*" >> "$TRACE"; [[ "$*" != *"$FAILURE"* || -z "$FAILURE" ]]; }
+''')
+            (root/'reset-candidate.sh').write_text((ROOT/'scripts/server/reset-candidate.sh').read_text())
+            trace=root/'trace'; trace.touch()
+            result=subprocess.run(['bash',str(root/'reset-candidate.sh'),argument],env=dict(os.environ,FIXTURE_ROOT=str(root),TRACE=str(trace),FAILURE=failure),capture_output=True,text=True)
+            return result,trace.read_text()
+
+    def test_candidate_is_backed_up_and_archive_checked_before_reset(self):
+        result,trace=self.run_recovery()
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertLess(trace.index('pg_dump'),trace.index('pg_restore'))
+        self.assertLess(trace.index('pg_restore'),trace.index('psql'))
+        self.assertIn('candidate_db=custom_candidate',trace)
+        self.assertIn('-d custom_candidate',trace)
+
+    def test_failed_backup_or_archive_check_never_resets_candidate(self):
+        for failure in ('pg_dump','pg_restore'):
+            with self.subTest(failure=failure):
+                result,trace=self.run_recovery(failure)
+                self.assertNotEqual(result.returncode,0)
+                self.assertNotIn('psql',trace)
+
+    def test_recovery_requires_explicit_discard_argument(self):
+        result,trace=self.run_recovery(argument='--unknown')
+        self.assertNotEqual(result.returncode,0)
+        self.assertEqual(trace,'')

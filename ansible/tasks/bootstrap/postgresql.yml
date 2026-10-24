@@ -4,20 +4,20 @@
 - name: Query existing PostgreSQL loader role
   ansible.builtin.command:
     argv: >-
-      {{ pg_admin_argv + ["-At", "-d", "postgres", "-c", "SELECT count(*) FROM pg_roles WHERE rolname='workouts_restore_loader'"] }}
+      {{ pg_admin_argv + ["-At", "-d", "postgres", "-c", "SELECT count(*) FROM pg_roles WHERE rolname='" ~ sync_loader_role ~ "'"] }}
   register: restore_loader_exists
   changed_when: false
 
 - name: Create restricted loader role only when missing
   ansible.builtin.command:
     argv: >-
-      {{ pg_admin_argv + ["-d", "postgres", "-c", "CREATE ROLE workouts_restore_loader LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION"] }}
+      {{ pg_admin_argv + ["-d", "postgres", "-c", "CREATE ROLE " ~ sync_loader_role ~ " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION"] }}
   when: restore_loader_exists.stdout | trim == '0'
 
 - name: Assert existing loader cannot administer other databases
   ansible.builtin.command:
     argv: >-
-      {{ pg_admin_argv + ["-At", "-d", "postgres", "-c", "SELECT NOT (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls) FROM pg_roles WHERE rolname='workouts_restore_loader'"] }}
+      {{ pg_admin_argv + ["-At", "-d", "postgres", "-c", "SELECT NOT (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls) FROM pg_roles WHERE rolname='" ~ sync_loader_role ~ "'"] }}
   register: loader_restricted
   changed_when: false
   failed_when: loader_restricted.rc != 0 or loader_restricted.stdout | trim != 't'
@@ -32,7 +32,7 @@
 
 - name: Create candidate owned by restricted loader on first bootstrap
   ansible.builtin.command:
-    argv: ["runuser", "-u", "postgres", "--", "{{ pg_bin }}/createdb", "-O", "workouts_restore_loader", "{{ sync_candidate_db }}"]
+    argv: ["runuser", "-u", "{{ sync_pg_admin_user }}", "--", "{{ pg_bin }}/createdb", "-h", "{{ sync_pg_socket }}", "-p", "{{ sync_pg_port | string }}", "-O", "{{ sync_loader_role }}", "{{ sync_candidate_db }}"]
   become_user: root
   when: candidate_exists.stdout | trim == '0'
 
@@ -47,8 +47,8 @@
 - name: Set candidate owner only if needed
   ansible.builtin.command:
     argv: >-
-      {{ pg_admin_argv + ["-d", "postgres", "-c", "ALTER DATABASE " ~ sync_candidate_db ~ " OWNER TO workouts_restore_loader"] }}
-  when: candidate_owner.stdout | trim != 'workouts_restore_loader'
+      {{ pg_admin_argv + ["-d", "postgres", "-c", "ALTER DATABASE " ~ sync_candidate_db ~ " OWNER TO " ~ sync_loader_role] }}
+  when: candidate_owner.stdout | trim != sync_loader_role
 
 - name: Permit only mapped receiver to log in as restore loader (highest HBA priority)
   ansible.builtin.blockinfile:
@@ -57,10 +57,10 @@
     backup: true
     marker: '# {mark} WORKOUTS-DB-SYNC MANAGED'
     block: |
-      local   {{ sync_candidate_db }} workouts_restore_loader peer map=workouts_restore_map
-      local   all                        workouts_restore_loader reject
-      host    all                        workouts_restore_loader 0.0.0.0/0 reject
-      host    all                        workouts_restore_loader ::/0 reject
+      local   {{ sync_candidate_db }} {{ sync_loader_role }} peer map=workouts_restore_map
+      local   all                        {{ sync_loader_role }} reject
+      host    all                        {{ sync_loader_role }} 0.0.0.0/0 reject
+      host    all                        {{ sync_loader_role }} ::/0 reject
   notify: Reload PostgreSQL
 
 - name: Map receiver OS account to the dedicated database role
@@ -69,7 +69,7 @@
     create: false
     marker: '# {mark} WORKOUTS-DB-SYNC MANAGED'
     block: |
-      workouts_restore_map workouts-db-restore workouts_restore_loader
+      workouts_restore_map {{ sync_receiver_user }} {{ sync_loader_role }}
   notify: Reload PostgreSQL
 
 - name: Apply PostgreSQL access configuration before testing and bootstrap
@@ -84,9 +84,15 @@
 
 - name: Validate restricted candidate connection as actual receiver OS user
   ansible.builtin.command:
-    argv: ["runuser", "-u", "workouts-db-restore", "--", "{{ pg_bin }}/psql", "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-U", "workouts_restore_loader", "-d", "{{ sync_candidate_db }}", "-c", "SELECT current_user"]
+    argv: ["runuser", "-u", "{{ sync_receiver_user }}", "--", "{{ pg_bin }}/psql", "-h", "{{ sync_pg_socket }}", "-p", "{{ sync_pg_port | string }}", "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-U", "{{ sync_loader_role }}", "-d", "{{ sync_candidate_db }}", "-c", "SELECT current_user"]
   become_user: root
   register: candidate_login
   changed_when: false
-  failed_when: candidate_login.rc != 0 or candidate_login.stdout | trim != 'workouts_restore_loader'
+  failed_when: candidate_login.rc != 0 or candidate_login.stdout | trim != sync_loader_role
 
+
+- name: Maintain test backup read access for existing tables and their creating owners
+  ansible.builtin.command:
+    argv: >-
+      {{ pg_admin_argv + ["-1", "-d", sync_test_db, "-v", "backup_role=" ~ sync_backup_role, "-f", base ~ "/sql/backup-permissions.sql"] }}
+  changed_when: false

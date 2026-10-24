@@ -15,6 +15,31 @@
     restore_pubkey: "{{ lookup('env','WORKOUTS_RESTORE_PUBKEY') }}"
     ansible_become_password: "{{ lookup('env','ANSIBLE_BECOME_PASSWORD') }}"
   tasks:
+    - name: Validate identifiers and absolute paths before rendering privileged policy
+      ansible.builtin.assert:
+        that:
+          - database_targets | unique | length == database_targets | length
+          - item is match('^[a-z][a-z0-9_]*$')
+        fail_msg: 'Unsafe or overlapping database/role configuration'
+      vars:
+        database_targets: ["{{ sync_production_db }}", "{{ sync_test_db }}", "{{ sync_candidate_db }}", "{{ sync_staging_db }}"]
+      loop: ["{{ sync_production_db }}", "{{ sync_test_db }}", "{{ sync_candidate_db }}", "{{ sync_staging_db }}", "{{ sync_loader_role }}", "{{ sync_backup_role }}"]
+    - name: Validate OS identities and numeric policy
+      ansible.builtin.assert:
+        that:
+          - item is match('^[a-z_][a-z0-9_-]*$')
+          - sync_pg_port | int > 0
+          - sync_pg_port | int <= 65535
+          - sync_max_dump_bytes | int > 0
+          - sync_health_retries | int > 0
+          - sync_health_delay | int > 0
+      loop: ["{{ sync_receiver_user }}", "{{ sync_pg_admin_user }}", "{{ sync_admin_user }}", "{{ sync_production_ssh_user }}"]
+    - name: Validate filesystem paths used in shell and psql scripts
+      ansible.builtin.assert:
+        that:
+          - item is match('^/[a-zA-Z0-9_./-]+$')
+          - "'..' not in item.split('/')"
+      loop: ["{{ sync_server_base }}", "{{ sync_receiver_home }}", "{{ sync_pg_bin }}", "{{ sync_pg_socket }}", "{{ sync_backup_dir }}", "{{ sync_lock }}"]
     - name: Configure prerequisites
       ansible.builtin.import_tasks: tasks/bootstrap/prerequisites.yml
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-source /usr/local/libexec/workouts-db-sync/common.sh
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 require_receiver
 lock_candidate
 
@@ -15,8 +15,8 @@ STATE="$(loader_file candidate-state.sql)"
 [[ "$STATE" == '0|0|1' ]] || fail 'Candidate must be empty with only dblink installed; refusing restore'
 
 # No --create, no --clean, no superuser. Atomic rollback on restore error.
-"$PG/pg_restore" -h /var/run/postgresql -p 5432 \
-  -U workouts_restore_loader -d "$CANDIDATE" \
+"$PG/pg_restore" -h "$PG_SOCKET" -p "$PG_PORT" \
+  -U "$LOADER_ROLE" -d "$CANDIDATE" \
   --no-owner --no-acl --no-comments --single-transaction --exit-on-error "$BACKUP"
 
 TABLES="$(loader_query "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname='public';")"

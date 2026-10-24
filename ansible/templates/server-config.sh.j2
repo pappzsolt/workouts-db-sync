@@ -1,0 +1,15 @@
+# Generated from config/sync.yml. Root-owned, never taken from SSH environment.
+readonly BASE={{ sync_server_base | string | quote }}
+readonly PG={{ sync_pg_bin | string | quote }}
+readonly CANDIDATE={{ sync_candidate_db | string | quote }}
+readonly TEST_DB={{ sync_test_db | string | quote }}
+readonly INCOMING={{ (sync_receiver_home ~ "/incoming") | quote }}
+readonly LOCK={{ sync_lock | string | quote }}
+readonly BACKUP_DIR={{ sync_backup_dir | string | quote }}
+readonly API={{ sync_test_api | string | quote }}
+readonly PG_PORT={{ sync_pg_port | string | quote }}
+readonly PG_SOCKET={{ sync_pg_socket | string | quote }}
+readonly LOADER_ROLE={{ sync_loader_role | string | quote }}
+readonly RECEIVER_USER={{ sync_receiver_user | string | quote }}
+readonly MAX_DUMP_BYTES={{ sync_max_dump_bytes | string | quote }}
+readonly PG_ADMIN_USER={{ sync_pg_admin_user | quote }}

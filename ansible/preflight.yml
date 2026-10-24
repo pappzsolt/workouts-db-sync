@@ -31,6 +31,11 @@
           - prod_host | length > 0
           - test_host | length > 0
           - prod_host != test_host
+          - sync_pg_port | int > 0
+          - lookup('env', 'TEST_DB_PORT') in ['', sync_pg_port | string]
+          - sync_max_dump_bytes | int > 0
+          - sync_health_retries | int > 0
+          - sync_health_delay | int > 0
           - database_targets | unique | length == database_targets | length
         fail_msg: 'Project, database policy, or non-secret endpoint configuration mismatch.'
       tags: [policy]

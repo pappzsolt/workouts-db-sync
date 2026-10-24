@@ -1,8 +1,9 @@
 -- Call only after the preparation guard or a successfully committed test sync.
 -- The caller supplies a single transaction and connects to the candidate only.
+SELECT set_config('workouts_sync.candidate_db', :'candidate_db', false);
 DO $guard$
 BEGIN
-  IF current_database() <> 'workouts_restore_candidate' THEN
+  IF current_database() <> current_setting('workouts_sync.candidate_db') THEN
     RAISE EXCEPTION 'Candidate cleanup cannot run in this database';
   END IF;
 END;

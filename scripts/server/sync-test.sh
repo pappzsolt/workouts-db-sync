@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # Fixed-target privileged maintenance action. Installed root:root 0755.
 set -Eeuo pipefail
-source /usr/local/libexec/workouts-db-sync/common.sh
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 SRC="$CANDIDATE"
 DST="$TEST_DB"
-BACKUP_DIR='/var/backups/workouts-db-sync'
-API='workouts-api'
 
 cleanup() {
   local code=$?
@@ -50,16 +48,16 @@ validate_schema() {
 create_backup() {
   local stamp backup
   [[ "$(docker inspect -f '{{.State.Running}}' "$API")" == true ]] || { echo 'ERROR: Test API must be running before sync' >&2; exit 1; }
-  install -d -o postgres -g postgres -m 700 "$BACKUP_DIR"
+  install -d -o "$PG_ADMIN_USER" -g "$PG_ADMIN_USER" -m 700 "$BACKUP_DIR"
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
   backup="$BACKUP_DIR/workouts_test_before_sync_$stamp.dump"
   SQLFILE="$(mktemp /tmp/workouts-sync.XXXXXXXX.sql)"
-  chown postgres:postgres "$SQLFILE"
+  chown "$PG_ADMIN_USER:$PG_ADMIN_USER" "$SQLFILE"
   chmod 600 "$SQLFILE"
   api_stopped=0
 
   # Recoverable on-host backup BEFORE any destructive test operation.
-  pg "$PG/pg_dump" -Fc -f "$backup" -d "$DST"
+  pg "$PG/pg_dump" -h "$PG_SOCKET" -p "$PG_PORT" -Fc -f "$backup" -d "$DST"
   pg "$PG/pg_restore" --list "$backup" >/dev/null
   echo "Test database backup verified: $backup"
 }
@@ -77,7 +75,7 @@ export_candidate() {
     fi
     args+=(--table="public.$name")
   done
-  pg "$PG/pg_dump" -d "$SRC" --data-only --column-inserts --no-owner --no-acl "${args[@]}" -f "$SQLFILE"
+  pg "$PG/pg_dump" -h "$PG_SOCKET" -p "$PG_PORT" -d "$SRC" --data-only --column-inserts --no-owner --no-acl "${args[@]}" -f "$SQLFILE"
   [[ -s "$SQLFILE" ]] || { echo 'ERROR: Empty transfer data' >&2; exit 1; }
 }
 
@@ -97,27 +95,26 @@ apply_transfer() {
     # Remove pg_dump's empty search_path setting so triggers can resolve public tables.
     sed "/^SELECT pg_catalog.set_config('search_path', '', false);$/d" "$SQLFILE"
     # Production login state must not become valid in test.
-    cat "$BASE/sql/clear-test-auth.sql"
+    printf "\\i %s/sql/clear-test-auth.sql\n" "$BASE"
     # All owned serial/identity sequences are reconciled to imported row IDs.
-    cat "$BASE/sql/reconcile-sequences.sql"
+    printf "\\i %s/sql/reconcile-sequences.sql\n" "$BASE"
+    printf "\\i %s/sql/assert-cleared.sql\n" "$BASE"
   } > "${SQLFILE}.transaction"
-  chown postgres:postgres "${SQLFILE}.transaction"
+  chown "$PG_ADMIN_USER:$PG_ADMIN_USER" "${SQLFILE}.transaction"
   chmod 600 "${SQLFILE}.transaction"
   # psql --single-transaction ensures the entire SQL file is committed or rolled back.
-  pg "$PG/psql" -X -v ON_ERROR_STOP=1 -q -1 -d "$DST" -f "${SQLFILE}.transaction"
+  pg "$PG/psql" -X -v ON_ERROR_STOP=1 -q -1 -h "$PG_SOCKET" -p "$PG_PORT" -d "$DST" -f "${SQLFILE}.transaction"
   rm -f -- "${SQLFILE}.transaction"
 }
 
 verify_transfer() {
-  local name source_count test_count changelog_after
-  # Verify three representative business tables match before candidate is cleared.
-  for name in users workouts exercises; do
-    source_count="$(q "$SRC" "SELECT count(*) FROM public.$name")"
-    test_count="$(q "$DST" "SELECT count(*) FROM public.$name")"
-    [[ "$source_count" == "$test_count" ]] || {
-      echo "ERROR: Count mismatch after sync: $name; candidate preserved" >&2; exit 1;
-    }
-  done
+  local source_fingerprints test_fingerprints changelog_after
+  # Compare all copied/rebuilt tables, including row content and duplicates.
+  # Deliberately cleared security/mail tables are verified empty separately.
+  source_fingerprints="$(q_file "$SRC" table-fingerprints.sql)"
+  test_fingerprints="$(q_file "$DST" table-fingerprints.sql)"
+  [[ -n "$source_fingerprints" && "$source_fingerprints" == "$test_fingerprints" ]] || fail 'Transferred table contents differ; candidate preserved'
+  q_file "$DST" assert-cleared.sql >/dev/null
   changelog_after="$(q_file "$DST" liquibase-fingerprint.sql)"
   [[ "$CHANGELOG_BEFORE" == "$changelog_after" ]] || {
     echo 'ERROR: Liquibase changelog was modified; candidate preserved' >&2; exit 1;
@@ -131,7 +128,7 @@ clear_candidate() {
   # can restore the next production dump without CREATE EXTENSION privileges.
   # The restored test DB and its durable on-host backup are untouched here.
   echo 'Test sync committed; clearing candidate for the next pipeline.'
-  pg "$PG/psql" -X -v ON_ERROR_STOP=1 -q -1 -d "$SRC" -f "$BASE/sql/reset-candidate.sql"
+  pg "$PG/psql" -X -v ON_ERROR_STOP=1 -q -1 -h "$PG_SOCKET" -p "$PG_PORT" -v candidate_db="$CANDIDATE" -d "$SRC" -f "$BASE/sql/reset-candidate.sql"
   echo 'Candidate cleared; dblink remains available for the next restore.'
 }
 
@@ -148,7 +145,7 @@ main() {
   verify_transfer
   clear_candidate
   echo "Test database sync succeeded: ${#TABLES[@]} source tables, preserved Liquibase and test-only tables."
-  echo 'Production sessions, login attempts and outgoing password-reset mail queue cleared in test.'
+  echo 'Production sessions, login attempts and outgoing password-reset and registration mail queues cleared in test.'
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

@@ -3,7 +3,7 @@
   ansible.builtin.stat:
     path: "{{ base }}/{{ item }}"
     follow: false
-  loop: [common.sh, receive-backup.sh, restore-dispatch.sh, receive-restore-candidate.sh, prepare-candidate.sh, sync-test.sh]
+  loop: [reset-candidate.sh, common.sh, receive-backup.sh, restore-dispatch.sh, receive-restore-candidate.sh, prepare-candidate.sh, sync-test.sh]
   register: installed
 
 - name: Require every entrypoint to be a root-owned executable regular file
@@ -18,3 +18,17 @@
   loop: "{{ installed.results }}"
   loop_control:
     label: "{{ item.item }}"
+
+- name: Inspect installed runtime configuration
+  ansible.builtin.stat:
+    path: "{{ base }}/server-config.sh"
+    follow: false
+  register: installed_policy
+
+- name: Require runtime policy to be a root-owned read-only regular file
+  ansible.builtin.assert:
+    that:
+      - installed_policy.stat.isreg | default(false)
+      - installed_policy.stat.pw_name | default('') == 'root'
+      - installed_policy.stat.gr_name | default('') == 'root'
+      - installed_policy.stat.mode | default('') == '0644'

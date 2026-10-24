@@ -3,9 +3,13 @@
 pg_admin_argv:
   - runuser
   - -u
-  - postgres
+  - "{{ sync_pg_admin_user }}"
   - --
   - "{{ pg_bin }}/psql"
+  - -h
+  - "{{ sync_pg_socket }}"
+  - -p
+  - "{{ sync_pg_port | string }}"
   - -X
   - -v
   - ON_ERROR_STOP=1

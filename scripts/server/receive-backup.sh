@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Verification mode of the forced SSH receiver: no database writes.
 set -Eeuo pipefail
-source /usr/local/libexec/workouts-db-sync/common.sh
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 require_receiver
 BACKUP="$(mktemp "$INCOMING/verify.XXXXXXXX.dump")"
 trap 'rm -f -- "$BACKUP"' EXIT

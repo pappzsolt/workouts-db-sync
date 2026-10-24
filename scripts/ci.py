@@ -7,6 +7,8 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from policy import POLICY
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -24,13 +26,13 @@ class SSHIdentity:
 
 
 BOOTSTRAP_SSH = SSHIdentity(
-    "pappzs", "ANSIBLE_BOOTSTRAP_SSH_KEY", "ANSIBLE_BOOTSTRAP_KNOWN_HOSTS"
+    POLICY["sync_admin_user"], "ANSIBLE_BOOTSTRAP_SSH_KEY", "ANSIBLE_BOOTSTRAP_KNOWN_HOSTS"
 )
 PRODUCTION_SSH = SSHIdentity(
-    "workouts-db-backup", "PROD_BACKUP_SSH_KEY", "PROD_SSH_KNOWN_HOSTS"
+    POLICY["sync_production_ssh_user"], "PROD_BACKUP_SSH_KEY", "PROD_SSH_KNOWN_HOSTS"
 )
 RESTORE_SSH = SSHIdentity(
-    "workouts-db-restore", "TEST_RESTORE_SSH_KEY", "TEST_RESTORE_SSH_KNOWN_HOSTS"
+    POLICY["sync_receiver_user"], "TEST_RESTORE_SSH_KEY", "TEST_RESTORE_SSH_KNOWN_HOSTS"
 )
 CI_FILE_VARIABLES = tuple(
     variable
