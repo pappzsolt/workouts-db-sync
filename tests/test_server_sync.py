@@ -49,7 +49,12 @@ q_file() {
     table-columns.sql)
       if [[ "$FAILURE" == columns && "$1" == workouts_test ]]; then echo different; else echo same; fi ;;
     table-fingerprints.sql)
-      if [[ "$FAILURE" == content && "$1" == workouts_test ]]; then echo altered; else echo same; fi ;;
+      [[ "$FAILURE" != empty-fingerprints ]] || return 0
+      if [[ "$FAILURE" == content && "$1" == workouts_test ]]; then
+        echo 'bug_reports|1|changed'
+      else
+        echo 'bug_reports|1|original'
+      fi ;;
     assert-cleared.sql) [[ "$FAILURE" != uncleared ]] ;;
     *) echo unchanged ;;
   esac
@@ -68,6 +73,7 @@ q_file() {
             dump.write_text(
                 "SELECT pg_catalog.set_config('search_path', '', false);\nSELECT 1;\n"
             )
+            Path(str(dump)+'.detail-versions').write_text('SELECT 1;\n')
             env = dict(
                 os.environ,
                 REPO_ROOT=str(ROOT),
@@ -163,12 +169,22 @@ trap cleanup EXIT
         result, trace, _ = self.run_sync_step("verify_transfer\nclear_candidate", "content")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("contents differ", result.stderr)
+        self.assertIn("--- candidate", result.stderr)
+        self.assertIn("+++ test", result.stderr)
+        self.assertIn("-bug_reports|1|original", result.stderr)
+        self.assertIn("+bug_reports|1|changed", result.stderr)
         self.assertNotIn("reset-candidate.sql", trace)
 
     def test_uncleared_mail_or_session_rows_preserve_candidate(self):
         result, trace, _ = self.run_sync_step("verify_transfer\nclear_candidate", "uncleared")
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("reset-candidate.sql", trace)
+
+    def test_empty_fingerprint_output_cannot_appear_successful(self):
+        result,trace,_=self.run_sync_step("verify_transfer\nclear_candidate","empty-fingerprints")
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn("Missing table fingerprints",result.stderr)
+        self.assertNotIn("reset-candidate.sql",trace)
 
 
 class RecoveryTests(unittest.TestCase):

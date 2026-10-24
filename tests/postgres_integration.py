@@ -214,7 +214,22 @@ class PgIntegration(unittest.TestCase):
                 psql("CREATE TABLE account_login_identifiers(identifier text PRIMARY KEY,user_id bigint,coach_id bigint)",database=db)
                 for name in names:
                     if name != 'account_login_identifiers':
-                        psql(f'CREATE TABLE {name}(id bigserial PRIMARY KEY,payload text)',database=db)
+                        psql(f'CREATE TABLE {name}(id serial PRIMARY KEY,payload text)',database=db)
+                # Real migration 029 functions need the prescription/reference columns.
+                columns = {
+                    'user_workouts':'detail_version bigint NOT NULL DEFAULT 1, workout_id integer, program_id integer, program_workout_id integer',
+                    'workout_exercises':'workout_id integer, exercise_id integer, sets integer, repetitions integer, rest_seconds integer, notes text, order_index integer',
+                    'user_workout_exercises':'user_workout_id integer REFERENCES user_workouts(id), workout_exercise_id integer',
+                    'user_workout_exercise_sets':'user_workout_exercise_id integer REFERENCES user_workout_exercises(id), set_number integer, target_repetitions integer, target_weight_kg numeric, rest_seconds integer',
+                    'workouts':'duration_minutes integer, intensity_level text',
+                    'workout_translations':'workout_id integer, language_id integer, name text, description text',
+                    'program_workouts':'program_id integer, workout_id integer, day_index integer',
+                    'exercises':'mobile_exercise_key text, image_url text',
+                    'exercise_translations':'exercise_id integer, language_id integer, name text, description text',
+                }
+                for table, definitions in columns.items():
+                    psql(f'ALTER TABLE {table} ADD COLUMN '+definitions.replace(', ', ', ADD COLUMN '),database=db)
+                psql(file=ROOT/'tests/fixtures/029-mobile-detail-version-triggers.sql',database=db)
                 psql('''CREATE FUNCTION rebuild_alias() RETURNS trigger LANGUAGE plpgsql AS $$
                 BEGIN
                   IF TG_TABLE_NAME='users' THEN INSERT INTO account_login_identifiers VALUES(NEW.payload,NEW.id,NULL);
@@ -226,6 +241,7 @@ class PgIntegration(unittest.TestCase):
                 for name in names:
                     if name != 'account_login_identifiers':
                         psql(f"INSERT INTO {name}(id,payload) VALUES(17,'{prefix}_{name}')",database=db)
+                psql("UPDATE user_workouts SET workout_id=17,program_id=17,program_workout_id=17; UPDATE user_workout_exercises SET user_workout_id=17,workout_exercise_id=17; UPDATE user_workout_exercise_sets SET user_workout_exercise_id=17; UPDATE user_workouts SET detail_version=41",database=db)
                 psql(f"CREATE TABLE databasechangelog(orderexecuted int,id text,author text); INSERT INTO databasechangelog VALUES(1,'{prefix}','fixture')",database=db)
             psql("CREATE TABLE login_rate_limits(id int,payload text); INSERT INTO login_rate_limits VALUES(1,'test-only')",database=target)
             work=Path(directory)
@@ -246,6 +262,10 @@ q_file() { psql -XAtq -v ON_ERROR_STOP=1 -d "$1" -f "$BASE/sql/$2"; }
             command='source "$1"; SQLFILE="$2"; api_stopped=0; trap cleanup EXIT; validate_schema; export_candidate; apply_transfer; verify_transfer'
             result=subprocess.run(['bash','-c',command,'transfer',str(script),str(work/'transfer.sql')],env=dict(os.environ,TRACE=str(work/'trace')),capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(psql('SELECT detail_version FROM user_workouts WHERE id=17',database=target),'41')
+            # Runtime changes must STILL bump the version after bulk restoration.
+            psql("UPDATE user_workout_exercise_sets SET target_repetitions=12 WHERE id=17",database=target)
+            self.assertEqual(psql('SELECT detail_version FROM user_workouts WHERE id=17',database=target),'42')
             self.assertEqual(psql('SELECT payload FROM bug_reports',database=target),'production_bug_reports')
             self.assertEqual(psql('SELECT count(*) FROM registration_email_outbox',database=target),'0')
             self.assertEqual(psql('SELECT count(*) FROM account_login_identifiers',database=target),'2')

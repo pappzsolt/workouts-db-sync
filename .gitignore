@@ -3,6 +3,8 @@
 # Only reviewed, version-controlled SQL under sql/ is permitted.
 !sql/
 !sql/*.sql
+# Reviewed migration code only: this fixture contains no database dump or user data.
+!tests/fixtures/029-mobile-detail-version-triggers.sql
 *.dump
 *.backup
 *.pgpass

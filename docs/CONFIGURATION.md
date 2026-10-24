@@ -65,3 +65,15 @@ new scripts first. Never reset the test or production database to fix a candidat
 the installed policy. Increase it deliberately as archives grow; exceeding it
 remains a hard error. The reviewed table manifest is still maintained explicitly
 when application migrations add/remove tables.
+
+## Mobile detail versions during bulk import
+
+Production migration 029 increments `user_workouts.detail_version` when child
+prescription rows are inserted. That is correct for runtime edits, but replaying
+a snapshot must preserve the original counter. `export-detail-versions.sql`
+exports source id/version updates under the same candidate maintenance lock.
+The transfer applies these updates after all INSERTs in the same transaction,
+then verifies the complete row including detail_version. No trigger or constraint
+is disabled, and no column is excluded from the fingerprint. The regression test
+uses frozen production migration 029 trigger definitions and checks that normal
+prescription changes still increment the counter after restoration.

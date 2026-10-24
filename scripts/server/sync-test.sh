@@ -9,7 +9,7 @@ cleanup() {
   local code=$?
   trap - EXIT
   if [[ -n "$SQLFILE" ]]; then
-    rm -f -- "$SQLFILE" "${SQLFILE}.transaction"
+    rm -f -- "$SQLFILE" "${SQLFILE}.transaction" "${SQLFILE}.detail-versions"
   fi
   if [[ "$api_stopped" == 1 ]]; then
     if ! docker start "$API" >/dev/null; then
@@ -77,6 +77,9 @@ export_candidate() {
   done
   pg "$PG/pg_dump" -h "$PG_SOCKET" -p "$PG_PORT" -d "$SRC" --data-only --column-inserts --no-owner --no-acl "${args[@]}" -f "$SQLFILE"
   [[ -s "$SQLFILE" ]] || { echo 'ERROR: Empty transfer data' >&2; exit 1; }
+  # Candidate is held under the maintenance lock: data and versions share one snapshot.
+  q_file "$SRC" export-detail-versions.sql > "${SQLFILE}.detail-versions"
+
 }
 
 apply_transfer() {
@@ -94,6 +97,10 @@ apply_transfer() {
     printf 'TRUNCATE TABLE %s RESTART IDENTITY;\n' "$table_sql"
     # Remove pg_dump's empty search_path setting so triggers can resolve public tables.
     sed "/^SELECT pg_catalog.set_config('search_path', '', false);$/d" "$SQLFILE"
+    # Migration 029 triggers run on child INSERTs and bump parent detail_version.
+    # Restore the source versions AFTER all rows, within this same transaction.
+    # Keep all triggers/constraints active and verify the complete row afterwards.
+    cat "${SQLFILE}.detail-versions"
     # Production login state must not become valid in test.
     printf "\\i %s/sql/clear-test-auth.sql\n" "$BASE"
     # All owned serial/identity sequences are reconciled to imported row IDs.
@@ -113,7 +120,13 @@ verify_transfer() {
   # Deliberately cleared security/mail tables are verified empty separately.
   source_fingerprints="$(q_file "$SRC" table-fingerprints.sql)"
   test_fingerprints="$(q_file "$DST" table-fingerprints.sql)"
-  [[ -n "$source_fingerprints" && "$source_fingerprints" == "$test_fingerprints" ]] || fail 'Transferred table contents differ; candidate preserved'
+  [[ -n "$source_fingerprints" && -n "$test_fingerprints" ]] || fail 'Missing table fingerprints; candidate preserved'
+  # Only table names, row counts and digests are printed, never business rows.
+  if ! diff -u -L candidate -L test \
+      <(printf '%s\n' "$source_fingerprints") \
+      <(printf '%s\n' "$test_fingerprints") >&2; then
+    fail 'Transferred table contents differ (table|row_count|fingerprint above); candidate preserved'
+  fi
   q_file "$DST" assert-cleared.sql >/dev/null
   changelog_after="$(q_file "$DST" liquibase-fingerprint.sql)"
   [[ "$CHANGELOG_BEFORE" == "$changelog_after" ]] || {
