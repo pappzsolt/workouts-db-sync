@@ -213,10 +213,13 @@ class PgIntegration(unittest.TestCase):
             for db, prefix in ((source,'production'),(target,'stale')):
                 psql("CREATE TABLE account_login_identifiers(identifier text PRIMARY KEY,user_id bigint,coach_id bigint)",database=db)
                 for name in names:
-                    if name != 'account_login_identifiers':
+                    if name != 'account_login_identifiers' and not name.startswith('personal_'):
                         psql(f'CREATE TABLE {name}(id serial PRIMARY KEY,payload text)',database=db)
                 # Real migration 029 functions need the prescription/reference columns.
                 columns = {
+                    'programs':'duration_days integer, coach_id integer',
+                    'program_translations':'program_id integer',
+                    'user_programs':'user_id integer REFERENCES users(id), program_id integer REFERENCES programs(id), assigned_at timestamptz DEFAULT CURRENT_TIMESTAMP',
                     'user_workouts':'detail_version bigint NOT NULL DEFAULT 1, workout_id integer, program_id integer, program_workout_id integer',
                     'workout_exercises':'workout_id integer, exercise_id integer, sets integer, repetitions integer, rest_seconds integer, notes text, order_index integer',
                     'user_workout_exercises':'user_workout_id integer REFERENCES user_workouts(id), workout_exercise_id integer',
@@ -230,6 +233,10 @@ class PgIntegration(unittest.TestCase):
                 for table, definitions in columns.items():
                     psql(f'ALTER TABLE {table} ADD COLUMN '+definitions.replace(', ', ', ADD COLUMN '),database=db)
                 psql(file=ROOT/'tests/fixtures/029-mobile-detail-version-triggers.sql',database=db)
+                # Frozen real application migrations: run the actual personal guards.
+                for migration in ('057-personal-programs.sql', '058-personal-program-safety.sql',
+                                  '059-personal-standalone-workouts.sql', '060-personal-workout-templates.sql'):
+                    psql(file=ROOT/'tests/fixtures'/migration,database=db)
                 psql('''CREATE FUNCTION rebuild_alias() RETURNS trigger LANGUAGE plpgsql AS $$
                 BEGIN
                   IF TG_TABLE_NAME='users' THEN INSERT INTO account_login_identifiers VALUES(NEW.payload,NEW.id,NULL);
@@ -239,9 +246,26 @@ class PgIntegration(unittest.TestCase):
                 CREATE TRIGGER user_alias AFTER INSERT ON users FOR EACH ROW EXECUTE FUNCTION rebuild_alias();
                 CREATE TRIGGER coach_alias AFTER INSERT ON coaches FOR EACH ROW EXECUTE FUNCTION rebuild_alias();''',database=db)
                 for name in names:
-                    if name != 'account_login_identifiers':
+                    if name != 'account_login_identifiers' and not name.startswith('personal_'):
                         psql(f"INSERT INTO {name}(id,payload) VALUES(17,'{prefix}_{name}')",database=db)
                 psql("UPDATE user_workouts SET workout_id=17,program_id=17,program_workout_id=17; UPDATE user_workout_exercises SET user_workout_id=17,workout_exercise_id=17; UPDATE user_workout_exercise_sets SET user_workout_exercise_id=17; UPDATE user_workouts SET detail_version=41",database=db)
+                psql("""
+                    UPDATE workout_exercises SET workout_id=17,exercise_id=17;
+                    UPDATE workout_translations SET workout_id=17;
+                    UPDATE program_translations SET program_id=17;
+                    UPDATE program_workouts SET program_id=17,workout_id=17,day_index=1;
+                    UPDATE user_programs SET user_id=17,program_id=17;
+                    INSERT INTO programs(id,payload,coach_id) VALUES(18,'coach-program',17);
+                    INSERT INTO workouts(id,payload) VALUES(18,'coach-workout');
+                    INSERT INTO program_workouts(id,payload,program_id,workout_id,day_index) VALUES(18,'coach-day',18,18,1);
+                    INSERT INTO workout_exercises(id,payload,workout_id,exercise_id) VALUES(18,'coach-exercise',18,17);
+                    INSERT INTO personal_program_owners(program_id,user_id,started_at,version) VALUES(17,17,CURRENT_TIMESTAMP,23);
+                    INSERT INTO personal_workout_owners(workout_id,program_id,user_id) VALUES(17,17,17);
+                    INSERT INTO personal_standalone_workouts(program_id) VALUES(17);
+                    INSERT INTO personal_workout_templates(id,user_id,source_program_id,favorite,program)
+                    VALUES(17,17,17,true,'{"name":"saved-template","durationDays":1,"startDate":null,"workouts":[]}');
+                    UPDATE user_workouts SET detail_version=41;
+                """,database=db)
                 psql(f"CREATE TABLE databasechangelog(orderexecuted int,id text,author text); INSERT INTO databasechangelog VALUES(1,'{prefix}','fixture')",database=db)
             psql("CREATE TABLE login_rate_limits(id int,payload text); INSERT INTO login_rate_limits VALUES(1,'test-only')",database=target)
             work=Path(directory)
@@ -260,8 +284,37 @@ q_file() { psql -XAtq -v ON_ERROR_STOP=1 -d "$1" -f "$BASE/sql/$2"; }
                 'source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/common.sh"',
                 f'source {shlex.quote(str(common))}'))
             command='source "$1"; SQLFILE="$2"; api_stopped=0; trap cleanup EXIT; validate_schema; export_candidate; apply_transfer; verify_transfer'
-            result=subprocess.run(['bash','-c',command,'transfer',str(script),str(work/'transfer.sql')],env=dict(os.environ,TRACE=str(work/'trace')),capture_output=True,text=True)
+            # A mid-import failure must roll back TRUNCATE and every inserted row,
+            # including snapshots/favorites, and still restart the API.
+            before=psql(file=ROOT/'sql/table-fingerprints.sql',database=target)
+            source_before=psql(file=ROOT/'sql/table-fingerprints.sql',database=source)
+            psql("""CREATE FUNCTION reject_sync_fixture() RETURNS trigger LANGUAGE plpgsql AS $$
+                BEGIN RAISE EXCEPTION 'injected transfer failure'; END $$;
+                CREATE TRIGGER reject_sync_fixture BEFORE INSERT ON personal_workout_templates
+                FOR EACH ROW EXECUTE FUNCTION reject_sync_fixture();""",database=target)
+            run=lambda: subprocess.run(['bash','-c',command,'transfer',str(script),str(work/'transfer.sql')],env=dict(os.environ,TRACE=str(work/'trace')),capture_output=True,text=True)
+            failed=run()
+            self.assertNotEqual(failed.returncode,0)
+            self.assertIn('injected transfer failure',failed.stderr)
+            self.assertEqual(before,psql(file=ROOT/'sql/table-fingerprints.sql',database=target))
+            self.assertEqual(source_before,psql(file=ROOT/'sql/table-fingerprints.sql',database=source))
+            self.assertIn('docker start fixture-api',(work/'trace').read_text())
+            psql('DROP TRIGGER reject_sync_fixture ON personal_workout_templates; DROP FUNCTION reject_sync_fixture()',database=target)
+            result=run()
             self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(psql('SELECT version FROM personal_program_owners WHERE program_id=17',database=target),'23')
+            self.assertEqual(psql('SELECT favorite FROM personal_workout_templates WHERE id=17',database=target),'t')
+            self.assertEqual(psql("SELECT program->>'name' FROM personal_workout_templates WHERE id=17",database=target),'saved-template')
+            self.assertEqual(psql('SELECT program_id FROM personal_standalone_workouts',database=target),'17')
+            # Guards must remain active after sync; ordinary coach editing still works.
+            with self.assertRaises(subprocess.CalledProcessError):
+                psql('UPDATE workout_exercises SET repetitions=99 WHERE id=17',database=target)
+            with self.assertRaises(subprocess.CalledProcessError):
+                psql('INSERT INTO user_programs(id,user_id,program_id) VALUES(19,17,17)',database=target)
+            psql('UPDATE workout_exercises SET repetitions=12 WHERE id=18',database=target)
+            psql('INSERT INTO user_programs(id,user_id,program_id) VALUES(18,17,18)',database=target)
+            self.assertEqual(psql('SELECT repetitions FROM workout_exercises WHERE id=18',database=target),'12')
+            self.assertEqual(psql("INSERT INTO personal_workout_templates(user_id,program,favorite) VALUES(17,'{}',false) RETURNING id",database=target),'18')
             self.assertEqual(psql('SELECT detail_version FROM user_workouts WHERE id=17',database=target),'41')
             # Runtime changes must STILL bump the version after bulk restoration.
             psql("UPDATE user_workout_exercise_sets SET target_repetitions=12 WHERE id=17",database=target)

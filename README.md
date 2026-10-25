@@ -91,3 +91,22 @@ size limit and server paths. Sync verifies every copied table's content, clears
 registration/password-reset outgoing mail and sessions, and waits for Docker API
 health. See [configuration and recovery](docs/CONFIGURATION.md) for backup-role
 maintenance and the root-only, snapshot-first candidate reset command.
+
+### Personal programs, standalone workouts and templates (migrations 057–060)
+
+The reviewed manifest includes `personal_program_owners`, `personal_workout_owners`,
+`personal_standalone_workouts` and `personal_workout_templates`. The sync first
+imports normal programs, workouts and assignments, then appends these four
+metadata tables in FK order **inside the same transaction**. This avoids enabling
+started-program ownership guards halfway through restoring their structure.
+No trigger or FK is disabled. Owner versions/started times, template snapshots
+and favorites are copied exactly and covered by fingerprint verification.
+Application detail versions are restored afterwards as before.
+
+Source and test still must have matching reviewed schemas: deploy the matching
+backend/Liquibase migrations to test before syncing a newer production schema.
+Bootstrap installs the changed manifest and receiver scripts; rerun the full
+pipeline from the fixed commit, rather than retrying an old `sync-test` job.
+The PostgreSQL integration fixture uses frozen application migrations 057–060,
+with a started personal workout and a coach workout, and checks exact copying,
+active guards, favorites/snapshots, sequence reconciliation and failure rollback.

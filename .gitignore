@@ -5,6 +5,10 @@
 !sql/*.sql
 # Reviewed migration code only: this fixture contains no database dump or user data.
 !tests/fixtures/029-mobile-detail-version-triggers.sql
+!tests/fixtures/057-personal-programs.sql
+!tests/fixtures/058-personal-program-safety.sql
+!tests/fixtures/059-personal-standalone-workouts.sql
+!tests/fixtures/060-personal-workout-templates.sql
 *.dump
 *.backup
 *.pgpass

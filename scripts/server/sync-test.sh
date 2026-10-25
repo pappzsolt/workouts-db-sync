@@ -9,7 +9,7 @@ cleanup() {
   local code=$?
   trap - EXIT
   if [[ -n "$SQLFILE" ]]; then
-    rm -f -- "$SQLFILE" "${SQLFILE}.transaction" "${SQLFILE}.detail-versions"
+    rm -f -- "$SQLFILE" "${SQLFILE}.transaction" "${SQLFILE}.detail-versions" "${SQLFILE}.personal"
   fi
   if [[ "$api_stopped" == 1 ]]; then
     if ! docker start "$API" >/dev/null; then
@@ -26,7 +26,11 @@ validate_schema() {
   table_names="$(q_file "$SRC" business-tables.sql)"
   expected_tables="$(q_file "$SRC" expected-business-tables.sql)"
   if [[ -z "$expected_tables" || "$table_names" != "$expected_tables" ]]; then
-    printf 'ERROR: Source tables differ from the reviewed transfer set.\nExpected:\n%s\nActual:\n%s\n' "$expected_tables" "$table_names" >&2
+    printf 'ERROR: Source tables differ from the reviewed transfer set.\n' >&2
+    diff -u -L reviewed-tables -L source-tables \
+      <(printf '%s\n' "$expected_tables") \
+      <(printf '%s\n' "$table_names") >&2 || true
+    printf 'Review new migrations and update sql/expected-business-tables.sql; rerun the full pipeline to install it.\n' >&2
     exit 1
   fi
   TABLES=()
@@ -64,19 +68,34 @@ create_backup() {
 
 export_candidate() {
   local name
-  local -a args=()
+  local -a args=() personal_args=()
   # The users/coaches INSERT triggers rebuild account_login_identifiers.
   # Keep the table in the TRUNCATE set, but never insert its source rows again:
   # doing so violates account_login_identifiers_pkey.
   # All other reviewed business tables are copied from the candidate.
   for name in "${TABLES[@]}"; do
-    if [[ "$name" == 'account_login_identifiers' ]]; then
-      continue
-    fi
+    case "$name" in
+      account_login_identifiers) continue ;;
+      personal_program_owners|personal_workout_owners|personal_standalone_workouts|personal_workout_templates)
+        personal_args+=(--table="public.$name")
+        continue
+        ;;
+    esac
     args+=(--table="public.$name")
   done
   pg "$PG/pg_dump" -h "$PG_SOCKET" -p "$PG_PORT" -d "$SRC" --data-only --column-inserts --no-owner --no-acl "${args[@]}" -f "$SQLFILE"
   [[ -s "$SQLFILE" ]] || { echo 'ERROR: Empty transfer data' >&2; exit 1; }
+  # Import personal ownership metadata LAST. Otherwise started_at guards block
+  # normal template INSERTs and the dedicated-start guard rejects assignments.
+  # With no ownership rows yet, core data loads normally. Restoring metadata
+  # afterwards preserves its exact version/started_at and all FK checks remain on.
+  # pg_dump orders these four tables by their own FK dependencies.
+  if (( ${#personal_args[@]} )); then
+    pg "$PG/pg_dump" -h "$PG_SOCKET" -p "$PG_PORT" -d "$SRC" --data-only --column-inserts --no-owner --no-acl "${personal_args[@]}" -f "${SQLFILE}.personal"
+    [[ -s "${SQLFILE}.personal" ]] || fail 'Empty personal metadata export'
+    cat "${SQLFILE}.personal" >> "$SQLFILE"
+    rm -f -- "${SQLFILE}.personal"
+  fi
   # Candidate is held under the maintenance lock: data and versions share one snapshot.
   q_file "$SRC" export-detail-versions.sql > "${SQLFILE}.detail-versions"
 

@@ -107,10 +107,15 @@ trap cleanup EXIT
     def reviewed_tables():
         return re.findall(r"\('([a-z_]+)'\)", (ROOT / "sql/expected-business-tables.sql").read_text())
 
-    def test_current_schema_is_accepted_with_new_registration_and_bug_report_tables(self):
+    def test_current_schema_is_accepted_with_registration_reports_and_personal_tables(self):
         result, trace, _ = self.run_sync_step("validate_schema")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("docker stop", trace)
+
+    def test_personal_tables_are_reviewed_explicitly(self):
+        self.assertTrue({'personal_program_owners', 'personal_workout_owners',
+                         'personal_standalone_workouts', 'personal_workout_templates'}
+                        .issubset(self.reviewed_tables()))
 
     def test_unreviewed_table_changes_fail_before_any_data_transfer(self):
         tables = self.reviewed_tables()
