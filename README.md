@@ -110,3 +110,10 @@ pipeline from the fixed commit, rather than retrying an old `sync-test` job.
 The PostgreSQL integration fixture uses frozen application migrations 057–060,
 with a started personal workout and a coach workout, and checks exact copying,
 active guards, favorites/snapshots, sequence reconciliation and failure rollback.
+
+Export files stay separate and are only read by the orchestration shell when
+assembling the transaction: it never appends to a PostgreSQL-owned file in sticky
+`/tmp` (which Linux `fs.protected_regular` can reject even for root). A missing
+personal export aborts before stopping the API. CI's real PostgreSQL transfer test
+runs the export/restore client as the postgres OS user when CI is root, keeps
+exports read-only and uses a sticky transfer directory to cover this boundary.

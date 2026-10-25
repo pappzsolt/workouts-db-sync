@@ -93,8 +93,8 @@ export_candidate() {
   if (( ${#personal_args[@]} )); then
     pg "$PG/pg_dump" -h "$PG_SOCKET" -p "$PG_PORT" -d "$SRC" --data-only --column-inserts --no-owner --no-acl "${personal_args[@]}" -f "${SQLFILE}.personal"
     [[ -s "${SQLFILE}.personal" ]] || fail 'Empty personal metadata export'
-    cat "${SQLFILE}.personal" >> "$SQLFILE"
-    rm -f -- "${SQLFILE}.personal"
+    # Keep pg-owned exports read-only to the root orchestration shell.
+    # Linux fs.protected_regular may reject root O_CREAT/append in sticky /tmp.
   fi
   # Candidate is held under the maintenance lock: data and versions share one snapshot.
   q_file "$SRC" export-detail-versions.sql > "${SQLFILE}.detail-versions"
@@ -102,7 +102,16 @@ export_candidate() {
 }
 
 apply_transfer() {
-  local table_sql
+  local table_sql name personal_metadata=0
+  for name in "${TABLES[@]}"; do
+    case "$name" in
+      personal_program_owners|personal_workout_owners|personal_standalone_workouts|personal_workout_templates)
+        personal_metadata=1 ;;
+    esac
+  done
+  if (( personal_metadata )); then
+    [[ -s "${SQLFILE}.personal" ]] || fail 'Missing personal metadata export; refusing transfer'
+  fi
   # Stop writes by the test API, then atomically truncate/reload.
   echo 'Stopping test workouts-api container during sync.'
   api_stopped=1
@@ -116,6 +125,11 @@ apply_transfer() {
     printf 'TRUNCATE TABLE %s RESTART IDENTITY;\n' "$table_sql"
     # Remove pg_dump's empty search_path setting so triggers can resolve public tables.
     sed "/^SELECT pg_catalog.set_config('search_path', '', false);$/d" "$SQLFILE"
+    # Read the second export without reopening the postgres-owned main dump for
+    # writing. Both imports still run in this same atomic psql transaction.
+    if (( personal_metadata )); then
+      sed "/^SELECT pg_catalog.set_config('search_path', '', false);$/d" "${SQLFILE}.personal"
+    fi
     # Migration 029 triggers run on child INSERTs and bump parent detail_version.
     # Restore the source versions AFTER all rows, within this same transaction.
     # Keep all triggers/constraints active and verify the complete row afterwards.

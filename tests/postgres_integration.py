@@ -7,6 +7,8 @@ import uuid
 import re
 import shlex
 import shutil
+import pwd
+import sys
 from contextlib import contextmanager
 import subprocess
 import unittest
@@ -269,16 +271,44 @@ class PgIntegration(unittest.TestCase):
                 psql(f"CREATE TABLE databasechangelog(orderexecuted int,id text,author text); INSERT INTO databasechangelog VALUES(1,'{prefix}','fixture')",database=db)
             psql("CREATE TABLE login_rate_limits(id int,payload text); INSERT INTO login_rate_limits VALUES(1,'test-only')",database=target)
             work=Path(directory)
+            # Match the production privilege boundary in root-run Linux CI:
+            # pg_dump owns private files as postgres inside a sticky directory,
+            # while the orchestration shell is root. Local non-root runs also
+            # protect dumps read-only so an accidental append cannot pass.
+            work.chmod(0o755)
+            transfer_dir=work/'transfer'
+            transfer_dir.mkdir(mode=0o1777)
+            transfer_dir.chmod(0o1777)
+            pg_admin='fixture'
+            switch_user=''
+            chown_function='chown() { :; }'
+            if os.geteuid()==0 and sys.platform.startswith('linux'):
+                account=pwd.getpwnam('postgres')
+                pg_admin=account.pw_name
+                helper=work/'run-as-postgres.py'
+                helper.write_text('import os,sys\n'
+                                  f'os.setgroups([]); os.setgid({account.pw_gid}); os.setuid({account.pw_uid})\n'
+                                  'os.execv(sys.argv[1],sys.argv[1:])\n')
+                helper.chmod(0o644)
+                switch_user=f'{shlex.quote(sys.executable)} {shlex.quote(str(helper))} '
+                chown_function='chown() { command chown "$@"; }'
             common=work/'common.sh'
-            common.write_text('set -Eeuo pipefail\n'+
-                f'BASE={shlex.quote(str(ROOT))}\nPG={shlex.quote(str(Path(shutil.which("pg_dump")).parent))}\nPG_PORT={os.environ["PGPORT"]}\nPG_SOCKET={shlex.quote(os.environ["PGHOST"])}\nPG_ADMIN_USER=fixture\nCANDIDATE={source}\nTEST_DB={target}\nAPI=fixture-api\n'+'''
+            common.write_text('set -Eeuo pipefail\numask 077\n'+
+                f'BASE={shlex.quote(str(ROOT))}\nPG={shlex.quote(str(Path(shutil.which("pg_dump")).parent))}\nPG_PORT={os.environ["PGPORT"]}\nPG_SOCKET={shlex.quote(os.environ["PGHOST"])}\nPG_ADMIN_USER={pg_admin}\nCANDIDATE={source}\nTEST_DB={target}\nAPI=fixture-api\n'+'''
 fail() { echo "$*" >&2; exit 1; }
-chown() { :; }
+CHOWN_FUNCTION
 docker() { echo "docker $*" >> "$TRACE"; }
-pg() { "$@"; }
+pg() {
+  SWITCH_USER"$@"
+  if [[ "$1" == */pg_dump ]]; then
+    # pg_dump is invoked with -f FILE as the final arguments in export_candidate.
+    # On non-root hosts this catches root-shell append regressions without sudo.
+    SWITCH_USER/bin/chmod 400 "${!#}"
+  fi
+}
 q() { psql -XAtq -v ON_ERROR_STOP=1 -d "$1" -c "$2"; }
 q_file() { psql -XAtq -v ON_ERROR_STOP=1 -d "$1" -f "$BASE/sql/$2"; }
-''')
+'''.replace('CHOWN_FUNCTION',chown_function).replace('SWITCH_USER',switch_user))
             script=work/'sync-test.sh'
             script.write_text((ROOT/'scripts/server/sync-test.sh').read_text().replace(
                 'source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/common.sh"',
@@ -292,7 +322,7 @@ q_file() { psql -XAtq -v ON_ERROR_STOP=1 -d "$1" -f "$BASE/sql/$2"; }
                 BEGIN RAISE EXCEPTION 'injected transfer failure'; END $$;
                 CREATE TRIGGER reject_sync_fixture BEFORE INSERT ON personal_workout_templates
                 FOR EACH ROW EXECUTE FUNCTION reject_sync_fixture();""",database=target)
-            run=lambda: subprocess.run(['bash','-c',command,'transfer',str(script),str(work/'transfer.sql')],env=dict(os.environ,TRACE=str(work/'trace')),capture_output=True,text=True)
+            run=lambda: subprocess.run(['bash','-c',command,'transfer',str(script),str(transfer_dir/'transfer.sql')],env=dict(os.environ,TRACE=str(work/'trace')),capture_output=True,text=True)
             failed=run()
             self.assertNotEqual(failed.returncode,0)
             self.assertIn('injected transfer failure',failed.stderr)

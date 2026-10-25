@@ -136,6 +136,13 @@ trap cleanup EXIT
                 self.assertNotIn("docker stop", trace)
                 self.assertNotIn("postgres", trace)
 
+    def test_missing_personal_export_fails_before_stopping_api(self):
+        result, trace, _ = self.run_sync_step("TABLES=(users personal_workout_templates)\napply_transfer")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Missing personal metadata export", result.stderr)
+        self.assertNotIn("docker stop", trace)
+        self.assertNotIn("postgres", trace)
+
     def test_transaction_failure_restarts_api_and_preserves_candidate(self):
         result, trace, dump_exists = self.run_sync_step(
             "apply_transfer\nclear_candidate", "postgres"
